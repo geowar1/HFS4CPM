@@ -1,0 +1,328 @@
+;    -*- tab-width:     8; -*-
+;;	.z80
+;;	.xlist
+;
+;##############################################################################
+;cphlde - compare word hl to de
+;##############################################################################
+;
+CPHLDE:	MACRO
+    IFZ280
+	cpw	hl,de
+    else
+	push	hl
+	or	a	;clear carry
+	sbc	hl,de
+	pop	hl
+    endif
+	ENDM
+;
+;##############################################################################
+;ldhlhl - load hl from (hl)
+;##############################################################################
+;
+LDHLHL:	MACRO
+    IFZ280
+	ldw	hl,(hl)
+    else
+	push	af
+	ld	a,(hl)
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+	pop	af
+    endif
+	ENDM
+;
+;##############################################################################
+;pushall - pushes all registers and setups stack to call popall on next return
+;##############################################################################
+;
+pushall:
+    IFZ280
+	push	de		;push all registers (except hl)
+	push	bc
+	push	af
+;
+	push	popall		;push popall routine address
+;
+	push	hl		;push hl
+;
+	ldw	hl,(sp+10)	;get return address
+	ex	(sp),hl		;swap with hl
+	ldw	(sp+10),hl	;save hl on stack
+    ELSE
+	ex	(sp),hl		;swap return address with hl
+	push	de		;save all the other register pairs
+	push	bc
+	push	af
+;
+	push	hl		;save the return address
+;
+	ld	hl,popall	;get popall routine address
+	ex	(sp),hl		;swap return address & popall routine address
+;
+	push	hl		;save the return address (again)
+;
+	push	af		;save af (again)
+;
+	ld	hl,12		;offset to hl on stack
+	add	hl,sp		;add the stack pointer
+;
+	ld	a,(hl)		;get l off stack
+	inc	hl		;bump pointer
+	ld	h,(hl)		;get h off stack
+	ld	l,a		;move l from stack to l register
+;
+	pop	af		;restore AF
+    ENDIF
+	ret
+;
+;##############################################################################
+;pushpair - pushes all register pairs and setup stack to call poppair on callie's return
+;##############################################################################
+;
+pushpair:
+    IFZ280
+	push	de		;push all registers (except hl)
+	push	bc
+;
+	push	poppair		;push poppair routine address
+;
+	push	hl		;push hl
+;
+	ldw	hl,(sp+8)	;get return address
+	ex	(sp),hl		;swap with hl
+	ldw	(sp+8),hl	;save hl on stack
+    ELSE
+	ex	(sp),hl		;swap return address with hl
+	push	de		;save all the other register pairs
+	push	bc
+;
+	push	hl		;save the return address
+;
+	ld	hl,poppair	;get poppair routine address
+	ex	(sp),hl		;swap return address & poppair routine address
+;
+	push	hl		;save the return address (again)
+;
+	push	af		;save af (again)
+;
+	ld	hl,10		;get offset to hl on stack
+	add	hl,sp		;add the stack pointer
+;
+	ld	a,(hl)		;get l off stack
+	inc	hl		;bump pointer
+	ld	h,(hl)		;get h off stack
+	ld	l,a		;move l from stack to l register
+;
+	pop	af		;restore AF
+    ENDIF
+	ret
+;
+popall:	pop	af		;restore all registers
+poppair:pop	bc		;restore all register pairs
+	pop	de
+	pop	hl
+	ret
+;
+;##############################################################################
+;multiply bc by de; result in hlde
+;##############################################################################
+;
+Mul16:	ld	a,16		;sixteen bits
+	or	a		;clear carry
+	sbc	hl,hl		;zero lsb result
+Mul16a:	add	hl,hl		;hl*=2
+	rl	e		;shift carry bit in and out of de
+	rl	d
+	jr	nc,$+6		;(bit set)
+;
+	add	hl,bc		;add in factor
+	jr	nc,$+3		;(no overflow)
+	inc	de		;set lsbit of msb
+	dec	a		;next bit
+	jr	nz,Mul16a	;(loop till a is zero)
+	ret
+;
+;##############################################################################
+;divide bc by de; bc=quotient, hl=remainder
+;##############################################################################
+;
+Div16:
+    IFZ280
+	ld	h,b		;dividend to hl
+	ld	l,c
+;
+	ld	b,d		;divisor to bc
+	ld	c,e
+;
+	xor	a		;zero de
+	ld	d,a
+	ld	e,a
+;
+        divuw   dehl,bc 	;divide dehl by bc; hl=quotient, de=remainder
+;
+	ld	b,h		;result to bc
+	ld	c,l
+;
+	ld	h,d		;remainder to hl
+	ld	l,e
+    else
+	or	a		;zero carry
+	sbc	hl,hl		;zero hl
+;
+	ld	a,b		;get msb quotient
+	ld	b,8		;shift eight bits
+d16l10:	rla			;ahl << 1 (shift carry out)
+	adc	hl,hl		;shift quotient in
+	sbc	hl,de		;hl=-de
+	jr	nc,d16l20	;(no borrow)
+	add	hl,de		;fix sbc
+d16l20:	djnz	d16l10		;(loop till --b is zero)
+;
+	rla			;one more bit
+	cpl			;complement the accumulator
+;
+	ld	b,a		;rotate a->b->c->a
+	ld	a,c
+	ld	c,b
+;
+	ld	b,8		;shift eight bits
+d16l30:	rla			;ahl << 1 (shift carry out)
+	adc	hl,hl		;shift quotient in
+	sbc	hl,de		;hl=-de
+	jr	nc,d16l40	;(no borrow)
+	add	hl,de		;fix sbc
+d16l40:	djnz	d16l30		;(loop till --b is zero)
+;
+	rla			;one more bit
+	cpl			;complement the accumulator
+;
+	ld	b,c		;results to bc
+	ld	c,a
+    endif
+	ret
+;
+;##############################################################################
+;Rand32 - from <http://wikiti.brandonw.net/index.php?title=Z80_Routines>
+;##############################################################################
+;
+;Inputs:
+;(seed1_L) holds the lower 16 bits of the first seed
+;(seed1_H) holds the upper 16 bits of the first seed
+;(seed2_L) holds the lower 16 bits of the second seed
+;(seed2_H) holds the upper 16 bits of the second seed
+;**NOTE: seed2 MUST be non-zero
+;Outputs:
+;HL is the result
+;Destroys:
+;AF,hl
+;
+;Tested and passes all CAcert tests
+;Uses a very simple 32-bit LCG and 32-bit LFSR
+;it has a period of 18,446,744,069,414,584,320
+;roughly 18.4 quintillion.
+;LFSR taps: 0,2,6,7  = 11000101
+;291cc
+;
+Rand32:	push	bc
+	push	de
+;
+	ld	hl,(seed1_L)
+        ld 	b,h
+        ld 	c,l
+        add	hl,hl
+Š        add	hl,hl
+        inc	l
+        add	hl,bc
+        ld	(seed1_L),hl
+;
+        ld	hl,(seed1_H)
+        ld	de,(seed1_H)
+        adc	hl,de
+        ld	(seed1_H),hl
+        ex	de,hl
+        ld	hl,(seed2_L)
+;
+        ld	bc,(seed2_H)
+        add	hl,hl
+        ld	(seed2_H),bc
+;
+        sbc	a,a
+        and	11000101b
+        xor	l
+        ld	l,a
+        ld 	(seed2_L),hl
+;
+        ex	de,hl
+        add	hl,bc
+;
+	pop	de
+	pop	bc
+;
+        ret
+;
+seed1_L:	dw  0FEEDh
+seed1_H:	dw  0CAFEh
+seed2_L:	dw  0BABEh
+seed2_H:	dw  0BEEFh
+;
+;##############################################################################
+;random fill memory (at hl) with bc bytes
+;##############################################################################
+;
+RandFill:
+	call	pushpair	;save registers
+    IFZ280
+	ld	a,r		;grab the refresh register
+	adc	a,(seed1_H)	;add the first seed value
+	ld	r,a		;update refresh register
+	ld	(seed1_H),a	;update first seed value
+    ELSE
+	ld	a,r		;grab the refresh register
+	ld	e,a		;save it
+	ld	a,(seed1_H)	;get the first seed value
+	add	a,e		;add the refresh register
+	ld	r,a		;update refresh register
+	ld	(seed1_H),a	;update first seed value
+    ENDIF
+randF10:ld	a,b		;count zero?
+	or	c
+	jr	z,randF90	;(yes)
+;
+        ex	de,hl		;swap address -> de
+	call	Rand32		;get random word -> hl
+        ex	de,hl		;swap random word (hl) with address (de)
+;
+	ld	a,(hl)		;xor random value into memory
+	xor	a,e
+	xor	a,d
+	ld	(hl),a		;store it
+;
+	inc	hl		;bump pointer
+;
+	dec	bc		;bump count
+	jr	randF10		;loop
+;
+randF90:ret			;this will poppair
+;
+;##############################################################################
+;fill memory (at hl) with bc bytes of the a register
+;##############################################################################
+;
+Fill:	call	pushpair	;save registers
+	ld	e,a
+fill10:	ld	a,b		;count zero?
+	or	c
+	ret	z		;(yes)
+;
+	ld	(hl),e		;store it
+	inc	hl		;bump pointer
+	dec	bc		;bump count
+	jr	fill10		;loop
+;
+	ret			;this will poppair
+;
+;##############################################################################
+;

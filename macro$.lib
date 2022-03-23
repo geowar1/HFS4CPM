@@ -1,0 +1,66 @@
+;    -*- tab-width:     8; -*-
+	.xlist
+;##############################################################################
+;	macro to align data to boundary
+;##############################################################################
+ALIGN$:	MACRO	?boundary
+	DEFS	?boundary - 1 - ($ + ?boundary - 1) % ?boundary
+	ENDM
+;##############################################################################
+;	macro to inline print string
+;##############################################################################
+CR	equ     'M'-'@'	;carriage return
+LF	equ     'J'-'@'	;line feed
+;
+PRINT$	MACRO	B,MESSAGE,A
+	LOCAL	string,skip
+	jr	skip
+string:	REPT	B
+	db	CR,LF
+	ENDM
+	db	MESSAGE
+	REPT	A
+	db	CR,LF
+	ENDM
+	db	'$'
+skip:	push	de
+	ld	de,string
+        call    print
+	pop	de
+	ENDM
+;
+;##############################################################################
+;cphlde - compare word hl to de
+;##############################################################################
+;
+CPHLDE:	MACRO
+    IFZ280
+	cpw	hl,de
+    else
+	push	hl
+	or	a	;clear carry
+	sbc	hl,de
+	pop	hl
+    endif
+	ENDM
+;
+;##############################################################################
+;ldhlhl - load hl from (hl)
+;##############################################################################
+;
+LDHLHL:	MACRO
+    IFZ280
+	ldw	hl,(hl)
+    else
+	push	af
+	ld	a,(hl)
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+	pop	af
+    endif
+	ENDM
+;
+;##############################################################################
+;;	.list
+

@@ -1,0 +1,989 @@
+;   -*- tab-width:	8;-*-
+;;	.z80
+	.xlist
+;==============================================================================
+;Boolean constants:
+;==============================================================================
+false	equ	0
+true	equ	not false
+;==============================================================================
+;ASCII Characters
+;==============================================================================
+NULL	equ	00h	;null
+ACK	equ	'F'-'@' ;acknowledge
+BEL	equ	'G'-'@' ;bell
+BS	equ	'H'-'@' ;backspace
+TAB	equ	'I'-'@' ;horzontial tab
+LF	equ	'J'-'@' ;line feed
+FF	equ	'L'-'@' ;form feed
+CR	equ	'M'-'@' ;carriage return
+XOFF	equ	'S'-'@' ;transmitt off
+NAK	equ	'U'-'@' ;negative acknowledge
+EOF	equ	'Z'-'@' ;end-of-file
+ESC	equ	'['-'@' ;escape
+DEL	equ	7Fh	;delete
+;==============================================================================
+;CP/M Plus entry points
+;==============================================================================
+wboot	equ	00000h	;warm boot
+reboot	equ	00000h	;system reboot
+bdos	equ	00005h	;bdos entry point
+fcb	equ	0005Ch	;file control block
+fcb1	equ	0006Ch	;alternate file control block
+tail	equ	00080h	;command tail
+tpa	equ	00100h	;temporary program area
+;==============================================================================
+;CP/M Plus BDOS function codes
+;==============================================================================
+$coninp equ	1	;console input function
+$conout equ	2	;console output function
+$print	equ	9	;print string until '$'
+$conips equ	11	;console input status
+$vers	equ	12	;get cp/m version
+$openf	equ	15	;open file
+$readf	equ	20	;read file
+$scb	equ	49	;get/set scb info
+$stime	equ	104	;get/set system time
+$parse	equ	152	;parse filename
+;==============================================================================
+;utility subroutines for console i/o
+;==============================================================================
+;
+;##############################################################################
+;dump bc bytes @hl
+;==============================================================================
+;
+dump:	call	pushall		;save all registers (and popall as return address)
+	xor	a		;no headers
+	ld	d,h		;copy dump address to offset
+	ld	e,l
+	jr	dump05
+;
+dumpoff:call	pushall		;save all registers (and popall as return address)
+;
+dump05: or	a		;headers?
+	jr	z,dump10	;(no)
+;
+	PRINT$	1,'	 +0 +1 +2 +3 +4 +5 +6 +7 +8 +9 +A +B +C +D +E +F',1
+;
+dump10: ld	a,b		;is count zero?
+	or	c
+	jp	z,dump99	;(yes)
+;
+	push	bc		;save byte count
+	push	hl		;save address
+;
+	xor	a		;clear carry flag
+	ld	hl,16		;is byte count less than 16?
+	sbc	hl,bc
+	jr	nc,dump15	;(yes)
+;
+	ld	bc,16		;set byte count to 16 max
+;
+dump15: ld	b,c		;copy byte count to b
+;
+	ex	de,hl		;offset to hl
+	call	hex_w		;output hex word (offset hl) to console
+	ld	a,':'
+	call	putchr
+	ex	de,hl		;offset back to de
+;
+	pop	hl		;restore address
+	push	hl		;save address
+;
+dump20: ld	a,' '
+	call	putchr
+;
+	ld	a,(hl)		;get byte from memory
+	call	hex_b		;output hex byte (a) to console
+;
+	inc	hl		;bump pointer
+;
+	djnz	dump20		;(loop till byte count-- is zero)
+;
+	PRINT$	0,' |',0
+;
+	pop	hl		;restore address
+;
+	ld	b,c		;count to b
+;
+dump40: ld	a,(hl)		;get byte from memory
+	res	7,a		;clear msbit
+	cp	07Fh		;delete character?
+	jr	z,dump48	;(yes)
+	cp	' '		;valid character?
+	jr	nc,dump50	;(yes)
+dump48: ld	a,'.'		;load invalid character
+dump50: call	putchr		;output character to console
+;
+	inc	hl		;bump pointer
+	inc	de		;bump offset
+	djnz	dump40		;(loop till byte count-- is zero)
+;
+	PRINT$	0,'|',1
+;
+	ex	(sp),hl		;swap byte count & dump address
+	xor	a		;clear carry
+	sbc	hl,bc
+	ex	(sp),hl		;swap dump address & byte count
+;
+	pop	bc		;restore byte count
+;
+	call	constat		;any input from console?
+	or	a,a		;test Acc zero
+	jp	z,dump10	;(no)
+;
+	call	getchr		;get input from console
+	jp	wboot		;go warm boot
+;
+dump99: ret
+;
+;##############################################################################
+;dump registers (for debugging)
+;==============================================================================
+;
+DumpRegs:
+	push	hl		;save hl
+;
+	push	af		;copy AF...
+	pop	hl		;...to HL
+	PRINT$	0,"AF: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	push	bc		;copy bc...
+	pop	hl		;...to hl
+	PRINT$	0,", BC: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	push	de		;copy de...
+	pop	hl		;...to hl
+	PRINT$	0,", DE: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	pop	hl		;restore hl
+	PRINT$	0,", HL: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	jp	crlf		;go print cr/lf
+;
+DumpAltRegs:
+	exx			;swap main/alt registers
+	call	DumpRegs
+	exx			;swap main/alt registers
+	ret
+;
+DumpAllRegs:
+	call	DumpRegs	;dump main registers
+	call	DumpAltRegs	;dump alt registers
+;
+	push	hl		;save hl
+;
+	push	ix		;copy IX...
+	pop	hl		;...to HL
+	PRINT$	0,"IX: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	push	iy		;copy bc...
+	pop	hl		;...to hl
+	PRINT$	0,", IY: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	ld	hl,4		;get offset to return address on stack
+	add	hl,sp
+	PRINT$	0,", SP: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	ld	a,(hl)		;get return address
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+	PRINT$	0,", PC: ",0	;print it...
+	call	hex_w		;...in hex
+;
+	pop	hl		;restore hl
+	jp	crlf		;go print cr/lf
+;
+;##############################################################################
+;dump file control block
+;==============================================================================
+;
+dump_fcb:
+	call	pushall		;save all registers (and popall as return address)
+;
+	ld	a,(hl)		;drive
+	inc	hl		;bump pointer
+;
+	or	a		;zero?
+	jr	z,dfcb_09	;(yes)
+;
+	add	'A'-1
+	call	putchr		;output character to console
+;
+	ld	a,':'		;output drive delimiter
+	call	putchr		;output character to console
+;
+dfcb_09:ld	b,8		;output 8 characters for filename
+dfcb_10:ld	a,(hl)		;get filename character
+	and	07Fh		;clear high bit
+	inc	hl		;bump pointer
+	cp	' '		;space?
+	call	nz,putchr	;(no)output character to console
+	djnz	dfcb_10		;(loop till --b is zero)
+;
+	ld	a,'.'		;output filename / extension delimiter
+	call	putchr		;output character to console
+;
+	ld	b,3		;output 3 characters for extension
+dfcb_20:ld	a,(hl)		;get extension character
+	inc	hl		;bump pointer
+	and	07Fh		;clear high bit
+	cp	' '		;space?
+	call	nz,putchr	;(no)output character to console
+	djnz	dfcb_20		;(loop till --b is zero)
+;
+	PRINT$ 0,", ex: ",0
+	ld	a,(hl)		;get extent
+	call	dec_b		;output decimal byte
+;
+	inc	hl		;bump to record count
+	inc	hl
+	inc	hl
+;
+	PRINT$ 0,", rc: ",0
+	ld	a,(hl)		;get extent
+	call	dec_b		;output decimal byte
+;
+	ld	de,17		;add offset to current record
+	add	hl,de
+;
+	PRINT$ 0,", cr: ",0
+	ld	a,(hl)		;get current record
+	inc	hl		;bump pointer
+	call	dec_b		;output decimal byte
+;
+	PRINT$ 0,", r0-3: ",0
+	ld	a,(hl)		;get r0
+	inc	hl		;bump pointer
+	ld	e,(hl)		;get r1
+	inc	hl		;bump pointer
+	ld	d,(hl)		;get r2
+	ex	de,hl		;move r1-2 to hl
+	call	hex_w		;output hexadecimal word
+	jp	hex_b		;output hexadecimal byte
+;
+;##############################################################################
+;
+;datehl converts the value in HL to BCD year, month, day
+;
+;Inputs:	HL contains hex days since December 31, 1977
+;
+;Outputs:	H contains BCD 20th century year
+;		L contains BCD month
+;		A contains BCD day
+;
+;		Zero flag set (Z) and A=0 if invalid date (zero) detected,
+;		Zero flag reset (NZ) and A=0ffh otherwise.
+;
+;==============================================================================
+;
+datehl:	ld	a,h
+	or	l		;test blank date (zero)
+	ret	z		;return z and a=0 if so
+;
+	push	bc		;save these registers
+	push	de
+;
+	ld	(days),hl	;save initial value
+	ld	b,78		;set years counter
+;
+dhl10:	call	ckleap
+	ld	de,-365		;set up for subtract
+	jr	nz,dhl20	;skip if no leap year
+;
+	dec	de		;set for leap year
+;
+dhl20:	add	hl,de		;subtract
+	jr	nc,dhl30	;continue if years done
+;
+	ld	a,h
+	or	l
+	jr	z,dhl30
+;
+	ld	(days),hl	;else save days count
+	inc	b		;increment years count
+	jr	dhl10		;and do again
+;
+;the years are now finished, the years count is in 'b' (hl is invalid)
+;
+dhl30:	ld	a,b
+	call	binbcd
+	ld	(years),a	;save bcd year
+;
+	call	ckleap		;check if leap year
+	ld	a,-28
+	jr	nz,dhl40	;february not 29 days
+;
+	ld	a,-29		;leap year
+;
+dhl40:	ld	(feb),a		;set february
+;
+	ld	hl,(days)	;get days count
+	ld	de,mtable	;point to months table
+	ld	b,0ffh		;set up 'b' for subtract
+	ld	a,0		;set a for # of months
+;
+dhl50:	ex	de,hl		;swap
+	ld	c,(hl)		;get month
+	ex	de,hl
+;
+	ld	(days),hl	;save days count
+	add	hl,bc		;subtract
+;
+	inc	de		;increment months counter
+	inc	a
+	jr	c,dhl50		;loop for next month
+;
+;the months are finished, days count is on stack.  first, calculate
+;the month.
+;
+	ld	b,a		;save months
+;
+	ld	hl,(days)
+	ld	a,h
+	or	l
+	jr	nz,dhl60
+;
+	dec	de		;backup two months
+	dec	de
+;
+	ld	a,(de)
+	cpl
+	inc	a
+	ld	l,a
+	dec	b
+;
+dhl60:	ld	a,l		;retrieve binary day of month
+	call	binbcd		;convert to bcd
+;
+	push	af		;save day
+;
+	ld	a,b		;retrieve the binary month
+	call	binbcd		;convert binary month to bcd
+	ld	l,a		;return month in l
+;
+	ld	a,(years)
+	ld	h,a		;return year in h
+;
+	pop	af		;restore day
+	or	a		;set nz flag
+;
+	pop	de		;restore these registers
+	pop	bc
+;
+	ret
+;
+;support routines:
+;
+;check for leap years.
+;
+ckleap:	ld	a,b
+	and	0fch
+	cp	b
+	ret
+;
+;convert a to bcd & store back in a
+;
+binbcd:	or	a
+	ret	z
+	push	bc
+	ld	b,a
+	xor	a
+;
+binbcd1:add	a,1
+	daa
+	dec	b
+	jp	nz,binbcd1
+	pop	bc
+	ret
+;
+;months table
+;
+mtable:	defb	-31		;january
+feb:	defb	-28		;february
+	defb	-31,-30,-31,-30	;mar-jun
+	defb	-31,-31,-30	;jul-sep
+	defb	-31,-30,-31	;oct-dec
+;
+days:	defs	2		;days
+years:	defs	1		;years
+;
+;##############################################################################
+;dump time stamp [@hl]
+;==============================================================================
+;
+dump_ts:call	pushall		;save all registers (and popall as return address)
+;
+	ld	e,(hl)		;get lsbyte of days since 1977
+	inc	hl		;bump pointer
+	ld	d,(hl)		;get msbyte of days since 1977
+	inc	hl		;bump pointer
+;
+	push	de		;save # of days since 1977
+	push	hl		;save pointer
+;
+	ex	de,hl		;move days since 1977 to hl
+	call	datehl		;convert days since 1977 (hl) to BCD day (a), month (l) & year(h)
+	jr	z,dts010	;(bad date)
+;
+	call	hex_b		;output day
+;
+	ld	a,'/'		;output date seperator
+	call	putchr		;to console
+;
+	ld	a,l		;get month
+	call	hex_b		;output it
+;
+	ld	a,'/'		;output date seperator
+	call	putchr		;to console
+;
+	ld	a,h		;get year
+;
+	cp	078h		;before 1978?
+	ld	a,019h		;assume century 19
+	jr	nc,dts005	;(no)
+;
+	ld	a,020h		;century 20
+;
+dts005:	call	hex_b		;output century to console
+	ld	a,h		;get year
+	call	hex_b		;output year to console
+;
+	pop	hl		;restore pointer
+	pop	de		;restore # of days since 1977
+	jr	dts020
+;
+dts010:	pop	de		;restore pointer
+	pop	hl		;restore # of days since 1977
+	call	dec_w		;output decimal word [in hl] to console
+	ex	de,hl		;swap pointer & # of days since 1977
+;
+dts020:	ld	a,' '		;output space...
+	call	putchr		;... to console
+;
+	ld	a,(hl)		;get hours
+	inc	hl		;bump pointer
+;
+	call	dec_b		;output decimal byte [in a] to console
+;
+	ld	a,':'		;output colan seperator...
+	call	putchr		;... to console
+;
+	ld	a,(hl)		;get minutes
+	cp	10		;greater than or equal to 10?
+	jr	nc,skip_lz	;(yes)
+;
+	ld	a,'0'		;output leading zero...
+	call	putchr		;... to console
+;
+	ld	a,(hl)		;get minutes (again)
+;
+skip_lz:jp	dec_b		;output decimal byte [in a] to console
+;
+;output byte (a) as decimal
+;
+dec_b:	call	pushall		;save all registers (and popall as return address)
+	ld	l,a
+	ld	h,0
+	jr	dec_wI
+;
+;##############################################################################
+;output word (hl) as decimal
+;==============================================================================
+;
+dec_w:	call	pushall		;save all registers (and popall as return address)
+;
+dec_wI: ld	b,h		;dividend to bc
+	ld	c,l
+;
+	ld	de,10		;divisor to de
+;
+	call	Div16		;bc=bc/de;hl=bc%de (remainder)
+;
+	ld	a,l		;get lsb remainder
+	add	'0'		;convert to ASCII '0'-'9'
+	push	af		;save ASCII
+;
+	ld	h,b		;result to hl
+	ld	l,c
+;
+	ld	a,h		;is result zero?
+	or	a,l
+	call	nz,dec_wI	;(no) recurse
+;
+	pop	af		;restore ASCII
+	jp	putchr		;output to console
+;
+;##############################################################################
+;output boolean ('0'/'1') not zero (flag)
+;==============================================================================
+;
+bool_nz:push	af		;save a
+	ld	a,'0'		;assume zero
+	jr	z,bool_z0	;(yes)
+	inc	a		;change to '1'
+bool_z0:call	putchr		;output to console
+	pop	af		;restore a
+	ret
+;
+;##############################################################################
+;output boolean ('0'/'1') carry (flag)
+;==============================================================================
+;
+bool_c: push	af		;save a
+	ld	a,'0'		;assume zero
+	adc	a,0		;add carry
+	call	putchr		;output to console
+	pop	af		;restore a
+	ret
+;
+;##############################################################################
+;output binary word (hl)
+;==============================================================================
+;
+bin_w:	call	pushall		;save all registers (and popall as return address)
+	ld	a,h		;output h in binary
+	call	bin_b
+	ld	a,l		;output l in binary
+;note: fall thru to bin_b
+;##############################################################################
+;output binary byte (a)
+;==============================================================================
+;
+bin_b:	push	af		;save registers
+	push	bc
+;
+	ld	b,8		;do 8 bits
+	ld	c,a		;value to c
+bin_b0: sla	c		;shift bits up and out into carry
+	call	bool_c		;output boolen carry
+	djnz	bin_b0		;(loop till --b is zero)
+;
+	pop	bc		;restore registers
+	pop	af
+	ret
+;
+;##############################################################################
+;output binary nibble
+;==============================================================================
+;
+bin_n:	push	af		;save registers
+	push	bc
+;
+	ld	c,a		;move to c
+	sla	c		;shift low nibble to high
+	sla	c
+	sla	c
+	sla	c
+;
+	ld	b,4		;4-bits
+	jr	bin_b0
+;
+;##############################################################################
+;output hex word (@hl)
+;==============================================================================
+;
+hex_w:	push	af	;save registers
+	ld	a,h
+	call	hex_b	;MSB of word
+	ld	a,l	;LSB of word
+	call	hex_b	;MSB of word
+	pop	af
+	ret
+;
+;##############################################################################
+;output hex byte (in a)
+;==============================================================================
+;
+hex_b:	push	af	;save acc
+;
+	srl	a
+	srl	a
+	srl	a
+	srl	a
+;
+	call	hex_n
+;
+	pop	af	;restore acc and fall thru to hex_n
+;note: fall thru to bin_b
+;##############################################################################
+;output hex nibble (in a)
+;==============================================================================
+;
+hex_n:	push	af	;save register
+;
+	or	0f0h	;convert to ASCII
+	daa
+	add	a,0A0h
+	adc	a,040h
+;
+	call	putchr
+;
+	pop	af	;restore register
+	ret
+;
+;##############################################################################
+;convert to upper case
+;==============================================================================
+;
+toupper:cp	'a'	;< 'a'?
+	ret	c	;(yes)
+	cp	'z'+1	;> 'z'?
+	ret	nc	;(yes)
+;
+	and	05Fh	;make it upper case
+	ret
+;
+;##############################################################################
+;convert to lower case
+;==============================================================================
+;
+tolower:cp	'A'	;< 'A'?
+	ret	c	;(yes)
+	cp	'Z'+1	;> 'Z'?
+	ret	nc	;(yes)
+;
+	or	020h	;make it lower case
+	ret
+;
+;##############################################################################
+;write character to console from a
+;==============================================================================
+;
+conout: ;alternative function name
+putchr: call	pushall		;save all registers (and popall as return address)
+putchr1:ld	e,a		;character to send
+	ld	c,$conout
+	jp	bdos		;send character
+;
+;##############################################################################
+;return A not zero if console character ready
+;==============================================================================
+;
+constat:call	pushpair	;save all register pairs (and poppair return address)
+	ld	c,$conips
+	jp	bdos
+;
+;##############################################################################
+;read console character to a
+;==============================================================================
+;
+conin:	;alternative function name
+getchr:	call	pushpair	;save all register pairs (and poppair return address)
+	ld	c,$coninp
+	jp	bdos
+;
+;##############################################################################
+;output carriage return and line feed
+;==============================================================================
+;
+crlf:   call	pushall		;save all registers (and popall as return address)
+	ld	a,cr
+	call	putchr1
+	ld	a,lf
+	jp	putchr1
+;
+;##############################################################################
+;output space to console
+;==============================================================================
+;
+space:  call	pushall		;save all registers (and popall as return address)
+	ld	a,' '
+	jp	putchr1
+;
+;##############################################################################
+;output tab to console
+;==============================================================================
+;
+puttab: call	pushall		;save all registers (and popall as return address)
+	ld	a,TAB
+	jp	putchr1
+;
+;##############################################################################
+;output the buffer addressed by de until $
+;==============================================================================
+;
+lprint: call	crlf		;new line
+print:	call	pushall		;save all registers (and popall as return address)
+	ld	c,$print
+	jp	bdos		;print the string
+;
+;##############################################################################
+;output the buffer addressed by hl until null
+;==============================================================================
+;
+print2NullSafe:
+	call	pushpair	;save all register pairs (and poppair return address)
+print2Null:
+	ld	a,(hl)		;load character
+	or	a		;is it NULL?
+	ret	z		;(yes)
+;
+	call	putchr		;output a to console
+	inc	hl		;bump pointer
+	jr	print2Null	;loop till NULL
+;
+;##############################################################################
+;concatinate null terminated string @de to destination string @hl
+;==============================================================================
+;
+strcat:	call	pushpair	;save all register pairs (and poppair return address)
+	call	scanNULL	;move hl to end of destination string
+	ex	de,hl		;swap cat & end of destination string pointers
+	jr	scpylp		;go copy cat string to end of destination string
+;
+;##############################################################################
+;copy null terminated string from @hl to @de
+;==============================================================================
+;
+strcpy:	call	pushpair	;save all register pairs (and poppair return address)
+;
+scpylp:	ld	a,(hl)		;get source character
+	inc	hl		;bump source pointer
+;
+	ld	(de),a		;store destination character
+	inc	de		;bump destination character
+;
+	or	a		;is it null?
+	ret	z		;(yes)
+;
+	jr	scpylp		;loop till null source character
+;
+;##############################################################################
+;compare NULL terminated strings (@de & hl)
+;==============================================================================
+;
+strcmp:	call	pushpair	;save all register pairs (and poppair return address)
+sc_lp:	xor	a		;NULL character to acc
+	cp	(hl)		;is NULL?
+	ret	z		;(yes)
+;
+	ex	de,hl		;swap string pointers
+	cp	(hl)		;is NULL?
+	ret	z		;(yes)
+;
+	ld	a,(hl)		;get character from string
+	ex	de,hl		;swap string pointers
+	cp	(hl)		;same?
+	ret	nz		;(no)
+;
+	inc	hl		;bump string pointers
+	inc	de
+;
+	jr	sc_lp		;loop till NULL or not equal
+;
+;##############################################################################
+;calculate the length of the string (@hl)
+;return result in bc
+;==============================================================================
+;
+strlen:	xor	a		;null terminator
+strlenA:call	pushpair	;save all register pairs (and poppair as return address)
+	ld	bc,0		;zero count
+l2t_lp: cp	a,(hl)		;term character?
+	jr	z,l2p_end	;(yes)
+;
+	inc	bc
+	inc	hl
+	jr	l2t_lp		;loop till term
+;
+l2p_end:
+    IFZ280
+	ldw	(sp+2),bc	;replace bc on poppair stack
+    ELSE
+	ld	hl,2		;computer address of bc on poppair stack
+	add	hl,sp
+;
+	ld	(hl),c		;replace bc on poppair stack
+	inc	hl
+	ld	(hl),b
+    ENDIF
+	ret
+;
+;##############################################################################
+;compare memory @hl to @de for bc bytes
+;==============================================================================
+;
+memcmp:call	pushpair	;save all register pairs (and poppair return address)
+;
+mcLP:	ld	a,b		;get count
+	or	c		;zero?
+	ret	z		;(yes)
+;
+	ld	a,(hl)		;get 1st byte
+	inc	hl		;bump pointer
+;
+	ex	de,hl		;swap pointers
+	cp	(hl)		;compare to 2nd byte
+	inc	hl		;bump pointer
+	ex	de,hl		;swap pointers
+;
+	ret	nz		;(not equal)
+;
+	dec	bc		;unbump count
+	jr	mcLP		;loop till not equal or count is zero
+;
+;##############################################################################
+;insert string @de before string @hl (both NULL terminated)
+;==============================================================================
+;
+strIns:	call	pushall		;push all registers (and popall return address)
+;
+	ex	de,hl		;swap insert & destination string pointers
+	call	strlen		;get length of (insert) string (@hl) to bc
+	ex	de,hl		;swap them back
+;
+	ld	a,b		;length zero?
+	or	c
+	ret	z		;(yes) nothing to insert
+;
+	push	hl		;save destination string address
+;
+	call	scanNULL	;scan forward to end of string terminator
+;
+;pad destination string with strlen(insert string) spaces
+;
+	push	bc		;save length
+;
+iss010:	ld	(hl),' '	;add a space
+	inc	hl		;bump pointer
+;
+	dec	bc		;decrease count
+	ld	a,b		;zero?
+	or	c
+	jr	nz,iss010	;(no)
+;
+	ld	(hl),NULL	;terminate new string
+;
+	pop	bc		;restore length
+	pop	hl		;restore destination string address
+;
+	call	padRight	;shift destination string to the right
+;
+	ex	de,hl		;swap insert & destination strin pointers
+	ldir			;copy bc bytes from @hl++ to @de++
+	ret
+;
+;##############################################################################
+;copy memory from @hl to @de for bc bytes
+;==============================================================================
+;
+memcpy:	call	pushpair	;save all register pairs (and poppair return address)
+	ldir
+	ret
+;
+;##############################################################################
+;pad string (@hl) to the right
+;==============================================================================
+;
+padRight:
+	call	pushall		;save all registers (and popall return address)
+;
+	call	strlen		;get length of string to bc
+;
+	add	hl,bc		;add offset to end of string
+;
+	dec	hl		;backup to last character of string (before terminator)
+;
+	ld	d,h		;copy to de
+	ld	e,l
+;
+;backup to last non-space character
+;
+pR0010:	ld	a,b		;length zero?
+	or	c
+	ret	z		;(yes)no non-space characters
+;
+	ld	a,(hl)		;get character from end-of-string
+	cp	' '		;space?
+	jr	nz,pR0025	;(no) jump into copy loop
+;
+	dec	hl		;unbunp pointer
+	dec	bc		;unbump length
+;
+	jr	pR0010		;loop till bc is zero or non-space character
+;
+;found last non-space character, copy string to end-of-string
+;
+pR0020:	ld	a,(hl)		;get character from end-of-non-space pointer
+pR0025:	ld	(de),a		;store it
+;
+	dec	de		;unbump end-of-string pointer
+	dec	hl		;unbump end-of-non-space pointer
+;
+	dec	bc		;unbump length
+;
+	ld	a,b		;length zero?
+	or	c
+	jr	nz,pR0020	;(loop till --length is zero)
+;
+;now while --hl != de add padding
+;
+	ex	de,hl		;swap pointers
+;
+pR0030:	ld	(hl),' '	;store a space
+	dec	hl		;unbump pointer
+	cphlde			;cpw hl,de
+	jr	nz,pR0030	;(loop till hl==de)
+;
+	ret			;return (to popall)
+;
+;##############################################################################
+;scan string @hl for null (or a)
+;==============================================================================
+;
+scanNULL:
+	xor	a		;get null
+;
+scanA:	cp	(hl)		;same character?
+	ret	z		;(yes)
+;
+	inc	hl		;bump pointer
+	jr	scanA		;loop till same
+;
+;##############################################################################
+;parse decimal string @hl
+;==============================================================================
+;
+parsedec:
+	ex	de,hl		;move string pointer to de
+	or	a		;clear carry
+	sbc	hl,hl		;zero result
+pd_lp:	ld	a,(de)		;get character
+;
+	cp	a,'0'
+	ret	c		;(less than 0)
+;
+	cp	a,'9'+1
+	ret	nc		;(greater than 9)
+;
+	sub	a,'0'		;convert ASCII to binary
+;
+	ld	b,h		;copy result to bc
+	ld	c,l
+;
+	add	hl,hl		;+ x1 = x2
+	add	hl,hl		;+ x2 = x4
+	add	hl,bc		;+ x1 = x5
+	add	hl,hl		;+ x5 = x10
+;
+	ld	c,a		;new digit to bc
+	ld	b,0
+	add	hl,bc		;add in new digit
+;
+	inc	de		;bump string pointer
+	jr	pd_lp		;loop till invalid character
+;##############################################################################
+;	z80 utility code
+;==============================================================================
+	include z80util.z80
+;

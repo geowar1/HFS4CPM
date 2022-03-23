@@ -1,0 +1,556 @@
+;   -*- tab-width:     8;-*-
+        title 'HFS for CP/M Plus hard drive mapping utility'
+;
+; 220422 George Warner - make it work again?
+; 210605 George Warner - Initial version
+;##############################################################################
+        .z80
+;##############################################################################
+;	include macros
+;==============================================================================
+	maclib MACRO$.LIB
+;##############################################################################
+;
+	.list
+        aseg
+        org     100h ;base of tpa
+;
+;##############################################################################
+;	program to map drive to partitions
+;==============================================================================
+;
+start:  ld      sp,stack	;set sp to local statk area
+;
+        PRINT$	1,"HFS for CP/M Plus MAPHD v1.1 (",1
+;
+	call	setup		;do setup
+;
+	ld	a,(tail)	;get length of command tail
+    if	0
+	PRINT$	1,"length: ",0
+	call	dec_b		;output decimal byte (in acc) to console
+	call	crlf
+    endif
+	or	a		;length zero?
+	jp	z,done		;(yes)
+;
+	PRINT$	1,"Before:",0
+	call	dumpMaps	;dump current mapping
+;
+	ld	hl,tail		;get address of command tail
+	inc	hl		;skip length
+	inc	hl		;skip delimiter
+;
+loop:	ld	(PFCB$INPUT),hl	;save parse address in PFCB
+	ld	hl,fcb		;save fcb address in PFCB
+	ld	(PFCB$FCB),hl
+;
+	ld	c,$parse	;BDOS function 152: parse filename
+	ld	de,PFCB
+	call	bdos
+;
+    if	0
+	PRINT$	1,"parse result: ",0
+	call	hex_w		;output hexdecimal word (in hl) to console
+	call	crlf
+    endif
+;
+	ld	de,-1		;error result?
+	cphlde
+	jp	nz,parseOk	;(no)
+;
+	PRINT$	1,"parse error at ",0
+	ld	hl,(PFCB$INPUT)
+	call	hex_w		;output hexdecimal word (in hl) to console
+	PRINT$	0,": """,0
+	call	print2NullSafe
+	PRINT$	0,"""",1
+;
+	jp	retBad
+;
+parseOk:
+	ld	(PFCB$INPUT),hl	;save new parse address in PFCB
+;
+    if	0
+	PRINT$	0,", FCB: ",0
+	ld	hl,fcb		;dump fcb
+	call	dump_fcb
+	ld	bc,32
+	call	dump
+    endif
+;
+	ld	a,(fcb)		;get drive byte
+	or	a		;default drive?
+	jr	nz,notzero	;(no)
+;
+	ld	a,(curdsk)	;get current drive
+	inc	a
+notzero:
+	dec	a		;drive A?
+	jr	nz,dskOk	;(no)
+;
+	PRINT$	1,"You can't map boot/system drive A:",1
+	call	setBad		;set error return code
+	jr	part99		;next parse
+;
+dskOk:	ld	(seldsk),a	;save disk
+;
+	add	a,'A'		;add offset to ASCII
+	call	conout
+	ld	a,':'
+	call	conout
+;
+	ld	hl,fcb+1	;address of file name
+	call	parsedec
+	call	dec_w		;output decimal word (in hl) to console
+;
+	ld	a,h		;partition zero?
+	or	l
+	jr	nz,partOk	;(no)
+;
+	PRINT$	1,"You can't map to boot partition (zero).",1
+	call	setBad		;set error return code
+	jr	part99		;next parse
+;
+partOk:	ld	a,(seldsk)	;get selected disk
+	call	map_hd		;map drive (in a) to partition # (in hl)
+;
+part99:	ld	hl,(PFCB$INPUT)	;get new parse address
+	ld	a,h		;result zero?
+	or	l
+	jp	z,done		;(yes)
+;
+	ld	a,' '
+	call	conout
+;
+	jp	loop		;loop till error or end of parse
+;
+done:	PRINT$	1,"After:",0
+	call	dumpMaps
+        ;call    crlf
+;
+return:	ld	de,(retCode)
+retDE:	ld	c,108		;BDOS function 108:Get/Set program return code
+	call	bdos
+	jp      reboot
+;
+setBad:	ld	hl,0FF00h	;set return code to 0xFF00 (bad)
+	ld	(retCode),hl
+	ret
+;
+retBad:	ld	de,0FF00h	;return code = 0xFF00 (bad)
+	jr	retDE
+;
+retCode:ds	2		;the program return code
+;
+;==============================================================================
+;do initial setup
+;==============================================================================
+;
+setup:	ld	c,$vers		;return version number
+	call	bdos
+	ld	a,l		;CP/M 3.1?
+	cp	031h
+	jr	z,verOk		;(yes)
+;
+vererr:	PRINT$	1,"MAPHD requires CP/M v3.1",1
+	jp	reboot
+;
+verOk:	xor	a		;zero the return code (assume success (optmist!))
+	sbc	hl,hl
+	ld	(retCode),hl
+;
+	ld	c,019h		;get current drive
+	call	bdos
+	ld	(curdsk),a	;save it
+;
+	ld	e,0FFh		;return error mode
+	jp	BDOS$setErrorMode
+;
+;==============================================================================
+;map drive (in a) to partition # (in hl)
+;==============================================================================
+;
+map_hd:	ld	(seldsk),a	;save disk
+;
+	push	hl		;save partition #
+;
+	push	af		;save drive #
+;
+	call	findPart	;find drive with this partition #
+	inc	a		;found?
+	jr	z,mhd005	;(no)
+;
+	PRINT$	1,'Error: Partition #',0
+	call	dec_w
+	PRINT$	0,' already mapped to drive ',0
+;
+	pop	af		;restore drive #
+;
+	add	a,'A'		;convert it to ASCII
+	call	conout
+	ld	a,':'
+	call	conout
+	call	crlf		;output cr/lf to console
+;
+	pop	hl		;fix stack
+	jp	setBad		;set unsuccessful return
+;
+mhd005:	pop	af		;restore drive #
+	call	getDPB		;get disk parameter block for drive in acc
+;
+	ld	de,17		;add offset to partition info (after DPB)
+	add	hl,de
+;
+	ld	de,hfs$sign	;address of partition signature
+	ld	bc,4		;check four bytes
+	call	memcmp		;compare memory @hl to @de for bc bytes
+	jr	z,mhd08		;(equal)
+;
+	PRINT$	1,"Not an HFS+ drive.",1
+	jp	wboot
+;
+mhd08:	add	hl,bc		;add offset past partition signature
+;
+	pop	de		;restore partition #
+;
+	ld	(hl),e		;store partition #
+	inc	hl
+	ld	(hl),d
+;
+	call	BDOS$flushBuffers ;flush drive buffers
+	call	setMediaFlags	;set door open flags
+;
+	ld	a,(seldsk)	;get selected disk
+	ld	b,a		;to b
+	ld	hl,1		;initialize drive vector to 1
+mhd010:	add	hl,hl		;shift up drive vector
+	djnz	mhd010		;(loop till --b is zero)
+;
+	ld	c,37		;BDOS:reset drive
+	ex	de,hl		;move vector to de
+	call	bdos
+;
+	ld	c,14		;BDOS:Select disk
+	ld	a,(seldsk)	;disk to e
+	ld	e,a
+	jp	bdos
+;
+;find drive mapped to partition # (in hl)
+;
+findPart:
+	xor	a		;zero drive #
+;
+fp010:	ld	(seldsk),a	;save disk #
+	push	hl		;save partition #
+;
+	ld	c,14		;BDOS:Select disk
+	ld	e,a		;disk to e
+	call	bdos
+	or	a		;success?
+	jr	nz,fp080	;(no)
+;
+	ld	c,31		;BDOS:Get DPB
+	call	bdos
+	ld	de,-1		;error?
+	cphlde			;compare hl to de
+	jr	z,fp080		;(yes)
+;
+	ld	de,17+4		;add offset to partition # (after DPB and partition signature)
+	add	hl,de
+	ldhlhl			;ldw hl,(hl)
+	ex	de,hl		;move to de
+;
+	pop	hl		;get partition # off stack
+	cphlde			;same?
+	jr	nz,fp090	;(no)
+;
+	call	reselect	;reselect previous drives
+;
+	ld	a,(seldsk)	;return drive #
+	ret
+;
+fp080:	pop	hl		;restore partition #
+;
+fp090:	ld	a,(seldsk)	;get disk #
+	inc	a		;bump it
+	cp	16		;max?
+	jr	nz,fp010	;(no)
+;
+	call	reselect	;reselect previous drives
+	xor	a		;return drive not found
+	dec	a
+	ret
+;
+;==============================================================================
+;reselect previous drives
+;==============================================================================
+;
+reselect:
+	call	pushall		;save all registers & popall return address
+;
+	ld	de,(vector)	;complement drive vector
+	ld	a,d
+	cpl
+	ld	d,a
+	ld	a,e
+	cpl
+	ld	e,a
+;
+	ld	c,37		;reset drives
+	jp	bdos
+;
+;==============================================================================
+;dump partition #'s for all logged in drives
+;==============================================================================
+;
+dumpMaps:
+	call	crlf
+;
+	ld	c,24		;BDOS:return login vector (to hl)
+	call	bdos
+	ld	(vector),hl
+;
+	xor	a		;zero drive #
+;
+dm_010:	push	af		;save drive #
+;
+	srl	h		;shift vector right
+	rr	l
+	jr	nc,dm_080	;(no drive bit)
+;
+	push	hl		;save vector
+;
+	push	af		;save drive # (again!)
+	add	a,'A'		;convert drive # to ASCII
+	call	conout		;output it to console
+	ld	a,':'		;output seperator to console
+	call	conout
+	pop	af		;restore drive #
+;
+	call	getDPB		;get DPB (drive # in acc)
+;
+	ld	de,17		;add offset to partition # (after DPB)
+	add	hl,de
+;
+if 0
+	ld	bc,6		;dump partition signature & #
+	call	dump
+endif
+;
+	ld	de,hfs$sign	;address of partition signature
+	ld	bc,4		;check four bytes
+	call	memcmp		;compare memory @hl to @de for bc bytes
+	jr	z,dm_020	;(equal)
+;
+	PRINT$	0,"!hfs+",0	;Not an HFS+ drive
+;;	call	dump
+	jr	dm_070
+;
+dm_020:	add	hl,bc		;skip past partition signature
+	ldhlhl			;ldw hl,(hl)
+	call	dec_w		;output decimal word (in hl) to console
+;
+dm_070:	call	space		;output space to console
+;
+	pop	hl		;restore vector
+;
+dm_080:	pop	af		;restore drive #
+	inc	a		;bump it
+	cp	16		;max?
+	jr	nz,dm_010	;(no)
+;
+	jp	crlf		;output cr/lf to console & return
+;
+;==============================================================================
+;get disk parameter block for drive in acc
+;==============================================================================
+;
+getDPB:	ld	(seldsk),a	;save disk
+;
+	ld	c,14		;BDOS:Select disk
+	ld	e,a		;disk to e
+	call	bdos
+	or	a		;success?
+	jp	z,gdpb40	;(yes)
+;
+	PRINT$	1,"BDOS 14:Select disk error:",0
+	call	hex_b		;output hexdecimal byte (in acc) to console
+	PRINT$	0," - ",0
+;
+	ld	a,h		;get error
+	cp	1		;disk I/O error?
+	jr	nz,gdpb10	;(no)
+;
+	PRINT$ 0,"Disk I/O Error",1
+	jr	gdpb30		;go reboot
+;
+gdpb10:	cp	4		;invalid drive?
+	jr	nz,gdpb20	;(no)
+;
+	PRINT$ 0,"Invalid drive",1
+	jr	gdpb30		;go reboot
+;
+gdpb20:	PRINT$ 0,"Unknown error",1
+gdpb30:	jp	retBad		;go return failure
+;
+gdpb40:	ld	c,31		;BDOS:Get DPB
+	call	bdos
+	ld	de,-1		;error?
+	cphlde
+	ret	nz		;(no)
+;
+	PRINT$	1,"BDOS 31:Get DPB error",1
+	jr	gdpb30		;go return failure
+;
+;==============================================================================
+;set door open media flags
+;==============================================================================
+;
+setMediaFlags:
+	ld	a,54		;save offset to media flag in SCB
+	ld	(SCBPT$OFFSET),a
+;
+	ld	a,0FFh		;save set operation
+	ld	(SCBPT$SET),a
+;
+	;ld	a,0FFh		;save media flag value (same as set operation)
+	ld	(SCBPT$VALUE),a
+;
+	ld	c,031h		;get/set SCB
+	ld	de,SCBPT
+	call	bdos
+;
+	call	BIOS$DRVTBL	;get address of disk drive table
+;
+if 0
+	PRINT$	1,"DPH: ",1
+	ld	bc,25		;dump DPH
+	call	dump
+endif
+;
+	ret
+;
+;==============================================================================
+;BDOS:	set error mode
+;	params:	E=0FFh - return error; E=0FEh - return & display error; else default error mode
+;==============================================================================
+;
+BDOS$setErrorMode:
+	ld	c,02Dh		;set BDOS error mode
+	jp	bdos
+;
+;==============================================================================
+;BDOS:	flush buffers
+;==============================================================================
+;
+BDOS$flushBuffers:
+	ld	c,030h		;flush buffers
+	ld	e,0FFh		;all active
+	jp	bdos
+;
+;==============================================================================
+;parameters:	C=disk drive (0-15)
+;		E=initial select flag (lsb = 0)
+;==============================================================================
+;
+BIOS$SELDSK:
+	ld	(BIOSPB+1),a	;save A register
+	ld	a,9		;BIOS function select disk
+	jr	BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BIOS$SELTRK:
+	ld	(BIOSPB+1),a	;save A register
+	ld	a,10		;BIOS function select track
+	jr	BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BIOS$SELSEC:
+	ld	(BIOSPB+1),a	;save A register
+	ld	a,11		;BIOS function select sector
+	jr	BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BIOS$SETDMA:
+	ld	(BIOSPB+1),a	;save A register
+	ld	a,12		;BIOS function set DMA
+	jr	BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BIOS$READ:
+	ld	(BIOSPB+1),a	;save A register
+	ld	a,13		;BIOS function read sector
+	jr	BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BIOS$WRITE:
+	ld	(BIOSPB+1),a	;save A register
+	ld	a,14		;BIOS function write sector
+	ld	c,1		;non-deferred write
+	jr	BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BIOS$DRVTBL:
+	ld	a,22		;BIOS function get address of disk drive table
+	;;fall thru to BDOS$directBIOS
+;
+;==============================================================================
+;==============================================================================
+BDOS$directBIOS:
+	ld	(BIOSPB),a	;save BIOS function number
+	ld	(BIOSPB+2),bc	;save BC registers
+	ld	(BIOSPB+4),de	;save DE registers
+	ld	(BIOSPB+6),hl	;save HL registers
+;
+	ld	c,032h		;bdos - direct BIOS calls
+	ld	de,BIOSPB
+	jp	bdos
+;==============================================================================
+;
+BIOSPB:	ds	1	;BIOS function number
+	ds	1	;A register
+	ds	2	;BC register
+	ds	2	;DE register
+	ds	2	;HL register
+;
+SCBPT:
+SCBPT$OFFSET:	ds	1	;Offset within SCB
+SCBPT$SET	ds	1	;0FFh=set byte, 0FEh=set word, 000h=get
+SCBPT$VALUE	ds	2	;byte or word value to be set
+;
+PFCB:
+PFCB$INPUT:
+	ds	2	;address of input ASCII string
+PFCB$FCB:
+	ds	2	;address of target FCB
+;
+curdsk:	ds	1	;current drive
+seldsk:	ds	1	;select drive
+vector:	ds	2	;logged in drive vector
+;
+hfs$sign:
+	db	'hfs+'	;HFS partition signature
+;
+;##############################################################################
+;##	CP/M utility code                                             	     ##
+;==============================================================================
+	include	cpmutil.z80
+;##############################################################################
+;##	stack and variable storage 				      	     ##
+;==============================================================================
+	ds	64	;stack area
+stack	equ	$
+;
+	ALIGN$	512
+DirBuf:		;fix directory buffer
+;
+;==============================================================================
+        end
+

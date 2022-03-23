@@ -1,0 +1,342 @@
+;    -*- tab-width:     8; -*-
+        title 'disk parameter block dump utility v1.2'
+;
+	.z80
+;
+; 220322 George Warner  align right 1st results column
+; 210626 George Warner	byte swap directory allocation vectors
+; 210522 George Warner	initial version
+;##############################################################################
+;	include macros
+;##############################################################################
+	maclib MACRO$.lib
+;##############################################################################
+;
+        aseg
+        org     100h ;base of tpa
+;
+;##############################################################################
+;	program to dump disk parameter block and calculate tracks per disk
+;##############################################################################
+;
+start:	ld	SP,stack	;set sp to local stack area (restored at finish)
+;
+	PRINT$	1,"DUMPDPB v1.3 (22 Mar 2022)",1
+;
+	call	getDPB		;get the DPB for the current drive
+	call	dumpDPB		;dump it
+;
+finish:	call	crlf
+	jp	WBOOT
+;
+;##############################################################################
+;	subroutines
+;##############################################################################
+;
+;==============================================================================
+;get the disk parameter block
+;==============================================================================
+;
+getDPB:	ld	C,01Fh		;BDOS get addr of dpb
+	jp	BDOS		;jump to BDOS and return to POPPAIR
+;
+;==============================================================================
+;dump the disk parameter block at (hl)
+;==============================================================================
+;
+dumpDPB:call	pushall		;save all registers (and popall as return address)
+;
+	PRINT$	1,"Dumping Disk Parameter Block at 0x",0
+	call	hex_w
+;
+	ld	bc,DPBsize
+	ld	de,DPB
+	ldir
+;
+	PRINT$	2,"	128-byte sectors per track (SPT):	",0
+	ld	hl,(SPT)	;get SPT
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	block shift (BSH):			",0
+	ld	a,(BSH)		;get BSH
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	block mask (BLM):			",0
+	ld	a,(BLM)		;get BLM
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	extent mask (EXM):			",0
+	ld	a,(EXM)		;get EXM
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	max block (DSM):			",0
+	ld	hl,(DSM)	;get DSM
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	maximum directory entry (DRM):		",0
+	ld	hl,(DRM)	;get DRM
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	alloc vector for directory (AL0,1):	",0
+	ld	hl,(AL01)	;get AL0, AL1
+	ld	a,h		;byte swap
+	ld	h,l
+	ld	l,a
+	call	bin_w		;output binary word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	checksum size (CKS):			",0
+	ld	hl,(CKS)	;get CKS
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	offset for system tracks (OFF):		",0
+	ld	hl,(OFF)	;get OFF
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	physical sector size shift (PSH):	",0
+	ld	a,(PSH)		;get PSH
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"	physical sector size mask (PSM):	        ",0
+	ld	a,(PSM)		;get PSM
+	call	bin_b		;output binary byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+;	compute other usefull stuff
+;
+	PRINT$	1,"Logical Sectors Per Physical (SPP=PSM+1):	",0
+	ld	a,(PSM)		;get PSM
+	inc	a
+	ld	(SPP),a
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"Physical Sectors per Track (PST=SPT/SPP):	",0
+	ld	bc,(SPT)
+	ld	e,a		;SPP to e
+	ld	d,0		;zero msb
+	call	Div16		;bc=bc/de, hl=remainder
+	ld	h,b		;PST to hl
+	ld	l,c
+	ld	(PST),hl	;store it
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"Logical Sectors Per Block (SPB=BLM+1):		",0
+	ld	a,(BLM)		;get BLM
+	inc	a		;bump it
+	ld	(SPB),a		;store SPB
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"Physical sectors Per Block (PPB=SPB/SPP):	",0
+	ld	a,(SPB)		;get SPB
+	ld	c,a
+	ld	b,0
+	ld	a,(SPP)		;get SPP
+	ld	e,a
+	ld	d,0
+	call	Div16		;bc=bc/de, hl=remainder
+	ld	(PPB),bc	;store PPB
+	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_b		;output decimal byte (in a)
+	PRINT$	0,"	  (0x",0
+	call	hex_b		;output hexdecimal byte (in a)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"Blocks Per Drive (BPD=DSM+1):			",0
+	ld	hl,(DSM)
+	inc	hl
+	ld	(BPD),hl	;store it
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	PRINT$	0,"Physical sectors Per Drive (PSD=BPD*PPB):	",0
+	ld	bc,(BPD)
+	ld	de,(PPB)
+	call	Mul16		;hlde=bc*de
+	ld	(PSD),hl	;store it
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	ld	bc,(PSD)
+	ld	de,(PST)
+	call	Div16		;bc=bc/de, hl=remainder
+	ld	h,b		;move to hl
+	ld	l,c
+;
+	ld	de,(OFF)	;if hl > OFF...
+	or	a		;clear carry
+	sbc	hl,de
+	add	hl,de
+	jr	c,skip10	;(yes)
+	add	hl,de		;add offset
+	PRINT$	0,"Tracks per drive (TPD=PSD/PST+OFF):		",0
+	jr	skip20
+skip10:	PRINT$	0,"Tracks per drive (TPD=PSD/PST):			",0
+skip20:	and	a		;clear carry
+	sbc	hl,hl		;zero hl
+	ld	l,a
+	call	dec_pad17	;output spaces to align for decimal value in HL
+	call	dec_w		;output decimal word (in hl)
+	PRINT$	0,"	(0x",0
+	call	hex_w		;output hexdecimal word (in hl)
+	PRINT$	0,")",1
+;
+	ret
+;
+;==============================================================================
+;pad to right align for decimal value (in HL) to column (in BC)
+;note: bc must be greater than # digits in decimal value
+;todo:move into cpmutil.z80?
+;==============================================================================
+;
+dec_pad17:
+	call	pushall		;save all registers (and popall as return address)
+	ld	bc,17		;right align to column 16
+	jr	dp_05		;skip pushall
+;
+dec_pad:call	pushall		;save all registers (and popall as return address)
+;
+dp_05:	push	bc		;save column
+	ld	b,h		;value to bc
+	ld	a,l		;fix for bc=0
+	or	1		;always make odd #
+	ld	c,a
+	pop	hl		;restore column to hl
+;
+	ld	de,10		;we will be dividing by ten each loop
+;
+dp_10:	dec	hl		;unbump column count
+;
+	ld	a,b		;is value zero?
+	or	c
+	jr	z,dp_20	;(yes)
+;
+	push	hl		;save decimal digits count
+	call	Div16		;bc=bc/de, hl=remainder
+	pop	hl		;restore decimal digits count
+	jr	dp_10		;loop till zero
+;
+dp_20:	ld	b,l		;6 - # decimal digits to b
+dp_30:	call	space		;output a space
+	djnz	dp_30		;(loop till byte count-- is zero)
+	ret
+;
+;##############################################################################
+;	local variables
+;##############################################################################
+;
+DPB	equ	$
+SPT:	ds	2		;128-byte Sectors Per Track
+BSH:	ds	1		;Block SHift
+BLM:	ds	1		;BLock Mask
+EXM:	ds	1		;EXtent Mask
+DSM:	ds	2		;Disk Storage Maxium
+DRM:	ds	2		;DiRectory block Maxium
+AL01:	ds	2		;ALlocatoin vector for directory
+CKS:	ds	2		;ChecKsum Size
+OFF:	ds	2		;OFFset for system tracks
+PSH:	ds	1		;Physical sector Size sHift
+PSM:	ds	1		;Physical sector Size Mask
+DPBsize equ	$-DPB
+;
+SPP:	ds	1		;Logical Sectors Per Physical
+PST:	ds	2		;Physical Sectors per Track
+SPB:	ds	1		;Logical Sectors Per Block
+PPB:	ds	1		;Physical sectors Per Block
+BPD:	ds	2		;Blocks Per Drive
+PSD:	ds	2		;Physical Sectors per Drive
+TPD:	ds	2		;Tracks Per Drive
+;
+;##############################################################################
+;**	CP/M utility code
+;==============================================================================
+	include	cpmutil.z80
+;##############################################################################
+;**	stack
+;==============================================================================
+	ds	256	;minimum stack area
+	ALIGN$	512	;align to 512 bytes
+stack	equ	$
+;
+	end

@@ -1,0 +1,702 @@
+;    -*- tab-width:     8; -*-
+	title 'CP/M HFS+ change directory utility'
+;
+;13-Jul-2021	George Warner	initial version
+;##############################################################################
+	.z80
+	maclib	MACRO$.LIB
+;##############################################################################
+	aseg
+	org     100h ;base of tpa
+;
+start:  ld      sp,stack	;setup local stack
+;
+	call	setup
+;
+	ld	a,(tail)	;anything in command tail?
+	or	a
+	jr	nz,sk0010	;(yes)
+;
+usage:	PRINT$	1,"usage: cd [d:]dirname.typ",0
+	jp	exit
+;
+sk0010:
+if 0
+	ld	a,(seldsk)	;get selected disk
+	add	a,'A'		;add offset to ASCII
+	call	conout
+	ld	a,':'
+	call	conout
+	call	puttab
+;
+	ld	hl,(selPart)	;select drive's partition
+	call	dec_w		;output hex word (in hl) to console
+;
+;	call	pwd		;print working dir (not implemented yet)
+	call	crlf		;output cr/lf to console
+endif
+	ld	a,(fcb+1)	;get first character of directory name
+	cp	'/'		;root?
+	jr	nz,sk0040	;(no)
+;
+sk0015:	call	findSLASH	;find root dir entry
+	jr	z,sk0030	;(found)
+;
+	call	findDDOT	;find parent dir entry
+	jr	nz,sk0020	;(not found)
+;
+	ld	de,14		;add offset to partition
+	add	hl,de
+;
+	ld	a,(hl)		;get partition from dir entry
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+;
+	ld	a,(seldsk)	;get selected disk
+	call	setPartitionForDrive
+	jr	sk0015		;loop till root or no parent
+;
+sk0020:	PRINT$	1,"Error: No root or parent dir found.",0
+;
+sk0030:	jp	exit
+;
+sk0040:	call	fixFCB		;convert all '-' to '.'
+;
+	ld	hl,fcb		;address of file control block
+	ld	a,'.'		;set 1st byte to dir byte
+	ld	(hl),a
+	ex	de,hl		;move fcb to de
+	ld	bc,12		;12 bytes
+	call	findEntry	;find dir entry matching fcb
+	jr	z,sk0050	;(found)
+;
+	PRINT$	1,"That dir doesn't exist!",0
+	jp	wboot
+;
+sk0050:	ld	de,14		;add offset to partition # in dir entry
+	add	hl,de
+;
+	ld	a,(hl)		;get partition # from dir entry
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+;
+	ld	a,(selDsk)	;get selected disk
+	call	setPartitionForDrive
+;
+exit:	jp      wboot		;return to CP/M+
+;
+;##############################################################################
+;fix fcb - convert all '-' to '.'
+;##############################################################################
+;
+fixFCB:	ld	hl,fcb+1	;get address of fcb
+	ld	b,11		;do 11 characters
+	ld	c,'.'		;period character
+ff0010:	ld	a,(hl)		;get fcb character
+	cp	'-'		;minus?
+	jr	nz,ff0020	;(no)
+	ld	(hl),c		;change to period
+ff0020:	inc	hl		;bump fcb pointer
+	djnz	ff0010		;(loop till --b is zero)
+	ret
+;
+;##############################################################################
+;set partition (in hl) for drive (in a)
+;##############################################################################
+;
+setPartitionForDrive:
+	call	pushpair	;push all register pairs (and poppair return address)
+;
+if 0
+	PRINT$	1,"Switching drive ",0
+;
+	push	af		;save disk
+	add	a,'A'		;convert to ASCII
+	call	putchr
+	pop	af
+;
+	PRINT$	0,": to partition # ",0
+	call	hex_w
+endif
+;
+	push	hl		;save partition #
+;
+	call	getDiskInfo	;get disk info for drive in acc
+	jr	nz,mhd08	;(is HFS+ drive)
+;
+	PRINT$	1,"Not an HFS+ drive.",1
+	jp	wboot
+;
+mhd08:	ld	hl,(DPB)	;get address of DPB
+	ld	de,21		;add offset to partition # address
+	add	hl,de
+;
+	pop	de		;restore partition #
+;
+	ld	(partNum),de	;save new partition #
+;
+	ld	(hl),e		;store partition # after DPB
+	inc	hl
+	ld	(hl),d
+;
+	call	BDOS$flushBuffers ;flush drive buffers
+	call	setMediaFlags	;set door open flags
+;
+	ld	a,(seldsk)	;get selected disk
+	ld	b,a		;to b
+	ld	hl,1		;initialize drive vector to 1
+mhd010:	add	hl,hl		;shift up drive vector
+	djnz	mhd010		;(loop till --b is zero)
+;
+	ld	c,37		;BDOS:reset drive
+	ex	de,hl		;move vector to de
+	call	bdos
+;
+	ld	c,14		;BDOS:Select disk
+	ld	a,(seldsk)	;disk to e
+	ld	e,a
+	jp	bdos
+;
+;##############################################################################
+;find this (DOT) dir entry
+;##############################################################################
+findDOT:
+	ld	de,dot$	;address of dot string
+	ld	bc,12		;12 bytes
+	jp	findEntry	;go find it
+;
+dot$:	db	'..          '	;dot dir string
+;##############################################################################
+;find parent (DOT-DOT) dir entry
+;##############################################################################
+findDDOT:
+	ld	de,dotdot$	;address of dotdot string
+	ld	bc,12		;12 bytes
+	jp	findEntry	;go find it
+;
+dotdot$:db	'...         '	;dotdot dir string
+;##############################################################################
+;find root (SLASH) dir entry
+;##############################################################################
+findSlash:
+	ld	de,slash$	;address of slash dir string
+	ld	bc,12		;12 bytes
+	jp	findEntry	;go find it
+;
+slash$:	db	'./          '	;slash dir string
+;##############################################################################
+;find empty dir entry
+;##############################################################################
+findEmpty:
+	ld	de,empty$	;address of empty string
+	ld	bc,1		;one byte
+	jr	findEntry	;go find it
+;
+;empty dir string
+empty$:	defb	0E5h
+;
+;##############################################################################
+;find dir entry
+;bc=length, de=entry to find
+;##############################################################################
+findEntry:
+	call	fnd1st		;find first entry
+fE0010:
+	if	0
+	push	bc
+	push	hl
+	PRINT$	1,"findEntry[",0
+	ld	hl,(index)
+	call	hex_w
+	PRINT$	0,"]:",0
+	pop	hl
+	ld	bc,32		;dump it
+	call	dump
+	pop	bc
+	endif
+;
+	call	memcmp		;compare (hl++) to (de++) for (bc--) bytes
+	ret	z		;(equal!)
+;
+	call	fndnxt		;find next entry
+	jr	nz,fE0010	;(not end-of-dir)
+;
+	xor	a		;return -1 [entry not found]
+	dec	a
+	ret
+;
+;##############################################################################
+;do initial setup
+;##############################################################################
+;
+setup:	ld	e,0FFh		;set error mode to return error mode
+	call	BDOS$setErrorMode
+;
+	ld	c,25		;get current drive
+	call	bdos
+	ld	(curdsk),a	;store it
+;
+if	0
+	PRINT$	1,"FCB: ",0
+	ld	hl,fcb		;dump fcb
+	call	dump_fcb
+	ld	bc,32
+	call	dump
+endif
+;
+	ld	a,(fcb)		;get drive byte
+	or	a		;default drive?
+	jr	nz,notzero	;(no)
+;
+	ld	a,(curdsk)	;get current drive
+	inc	a
+;
+notzero:ld	(fcb),a		;make it implicit
+	dec	a		;drive A?
+	jp	nz,dskok	;(no)
+;
+dskerr:	PRINT$	1,"CP/M HFS+ not supported on boot/system drive A.",0
+	jp	exit
+;
+dskok:	call	getDiskInfo	;get disk info (duh!)
+	ld	(selPart),hl	;save the select partition #
+	ret	nz		;(good)
+;
+	PRINT$	1,"Not HFS+ drive.",0
+	jp	reboot
+;
+;##############################################################################
+;get disk (in a) info; return partition # in hl (-1 & zero flag if invalid)
+;##############################################################################
+getDiskInfo:
+	call	selectDisk	;select drive (in a)
+	jp	nz,gdi020	;(invalid)
+;
+	call	BDOS$GETDPB	;get DPB
+	ld	(DPB),hl	;store it
+;
+	push	hl		;copy to IX
+	pop	ix
+;
+	ld	l,(ix+0)	;get SPT
+	ld	h,(ix+1)
+	ld	(spt),hl	;store it
+;
+	ld	l,(ix+7)	;get DRM
+	ld	h,(ix+8)
+	ld	(drm),hl	;store it
+;
+	inc	hl		;bump to count
+	ld	(count),hl	;store it
+;
+	ld	l,(ix+13)	;get offset
+	ld	h,(ix+14)
+	ld	(offset),hl	;store it
+;
+	ld	a,(ix+15)	;get PSH
+	ld	(psh),a		;store it
+;
+	ld	b,a		;compute sector size
+	inc	b		;do one extra (so we don't have to test for zero)
+	ld	hl,64		;start with half sector (because of extra)
+gdi010:	add	hl,hl		;double sector size
+	djnz	gdi010		;(loop until --b is zero)
+;
+	ld	(secsiz),hl	;store it
+;
+	push	ix		;DPB to hl
+	pop	hl
+;
+	ld	de,17		;add offset to HFS+ signature
+	add	hl,de
+;
+	ld	de,hfs$		;address of HFS+ string
+	ld	bc,4		;four bytes
+	call	memcmp		;compare (hl++) to (de++) for (bc--) bytes
+	jr	nz,gdi020	;(not HFS+ partition)
+;
+	add	hl,bc		;add offset to partition #
+	ldhlhl			;ldw hl,(hl)
+	jr	gdi030
+;
+gdi020:
+if 0
+	ld	bc,4
+	call	z,dump
+endif
+	ld	hl,-1
+;
+gdi030:	ld	(partNum),hl	;store it
+	ld	de,-1
+	cphlde			;cpw hl,de
+	ret
+;
+hfs$:	db	'hfs+'	;HFS+ partition signature
+;
+;##############################################################################
+;find first dir entry
+;##############################################################################
+;
+fnd1st:	or	a		;clear carry
+	sbc	hl,hl		;zero hl
+	dec	hl		;bump hl to -1
+	ld	(sector),hl	;set sector to -1 (to force 1st read)
+	ld	(index),hl	;start index at -1
+;
+;##############################################################################
+;find next dir entry
+;##############################################################################
+;
+fndnxt:	call	pushpair	;push all register pairs (and poppair return address)
+;
+	ld	hl,(index)	;bump index
+	inc	hl
+	ld	(index),hl
+;
+	if	0
+	PRINT$	1,"index: ",0
+	call	dec_w
+	PRINT$	0," (",0
+	call	hex_w
+	endif
+;
+	ex	de,hl		;move to de
+;
+	ld	hl,(count)	;are we done?
+	if	0
+	PRINT$	0,"), count: ",0
+	call	dec_w
+	PRINT$	0," (",0
+	call	hex_w
+	PRINT$	0,")",0
+	endif
+	or	a		;clear carry
+	sbc	hl,de
+	ret	z		;(yes)
+;
+	ld	hl,2		;dir entries per (128 byte) sector (half for extra shift)
+	ld	a,(psh)		;get physical shift factor
+	inc	a		;do extra shift (so we don't have to test for zero)
+	ld	b,a
+fnd005:	add	hl,hl
+	djnz	fnd005		;(loop until --b is zero)
+;
+	if	0
+	PRINT$ 0,", div by: ",0
+	call	dec_w
+	endif
+	ex	de,hl		;move to de
+;
+	ld	bc,(index)
+	call	Div16		;bc=bc/de, hl=bc%de
+	push	hl		;store remainder
+	if	0
+	PRINT$ 0,", mod;",0
+	call	hex_w
+	call	crlf
+	endif
+;
+	ld	de,(spt)	;divide by sectors per track
+	call	Div16		;bc=bc/de, hl=bc%de
+	ld	de,(sector)	;get last sector
+	ld	(sector),hl	;store new sector
+	sbc	hl,de		;same?
+	jr	z,$+3		;(yes)
+	dec	a
+	ld	(readflg),a	;store read flag
+;
+	ld	hl,(offset)	;add offset to track
+	add	hl,bc
+	ld	(track),hl	;store track
+;
+	pop	de		;restore remainder
+	ld	bc,32		;32 bytes per dir entry
+	call	Mul16		;dehl = bc * de
+	ld	de,DirBuf	;add dir buffer
+	add	hl,de		;[hl now had the dir entry address]
+;
+	ld	a,(readflg)	;need to do read?
+	or	a
+	jp	z,skipread	;(no)
+;
+	push	hl		;store dir entry address
+;
+	call	readDirSector
+;
+if	0
+	PRINT$	1,"Disk: ",0
+	ld	a,(seldsk)
+	call	dec_b
+;
+	PRINT$	0,", Track: ",0
+	ld	hl,(track)
+	call	dec_w
+	PRINT$	0," (0x",0
+	call	hex_w
+;
+	PRINT$	0,"), sector: ",0
+	ld	hl,(sector)
+	call	dec_w
+	PRINT$	0," (0x",0
+	call	hex_w
+	PRINT$	0,")",0
+;
+	if	0
+	call	crlf
+	ld	hl,DirBuf	;in this sector
+	ld	bc,(secsiz)
+	call	dump
+	call	crlf
+	endif
+endif
+;
+	pop	hl		;restore dir entry address
+;
+skipread:
+	ex	de,hl		;save dir entry address in de
+	ld	hl,6
+	add	hl,sp
+	ld	(hl),e		;ldw (hl),de
+	inc	hl
+	ld	(hl),d
+;
+	xor	a		;return not zero (not done)
+	dec	a
+	ret
+;
+;##############################################################################
+;select disk
+;##############################################################################
+selectDisk:
+	ld	(seldsk),a	;store select disk
+;
+	ld	c,14		;select disk
+	ld	e,a
+	call	bdos
+	or	a		;success?
+	ret	z		;(yes)
+;
+	ld	a,(quiet)	;quiet?
+	or	a
+	ret	nz		;(yes)
+;
+	ld	a,h		;get error code
+	cp	1		;disk I/O error?
+	jr	nz,ds_10	;(no)
+;
+	PRINT$	1,'Select Disk: Disk I/O error',0
+	jr	selerr9
+;
+ds_10:	cp	4		;invalid drive?
+	jr	nz,ds_20	;(no)
+;
+	PRINT$	1,'Select Disk: Invalid drive',0
+	jr	selerr9
+;
+ds_20:	PRINT$	1,'Select Disk: Unknown error;',0
+	call	dec_b		;output acc as decimal
+;
+selerr9:jp	exit
+;
+;##############################################################################
+;read dir sector
+;##############################################################################
+readDirSector:
+	call	selectDir	;select dir (disk, track, sector & DMA)
+	jp	BIOS$READ	;read sector
+;
+;##############################################################################
+;select dir (disk, track, sector & DMA)
+;##############################################################################
+selectDir:
+	ld	a,(seldsk)	;select disk
+	ld	c,a
+	call	BIOS$SELDSK
+;
+	ld	bc,(track)	;select track
+	call	BIOS$SELTRK
+;
+	ld	bc,(sector)	;select sector
+	call	BIOS$SELSEC
+;
+	ld	bc,DirBuf	;set DMA address
+	jp	BIOS$SETDMA
+;
+;##############################################################################
+;BDOS FUNCTION 45: Set Error Mode
+;parameters:	e=error mode (FF=return, FE=return & display else default)
+;##############################################################################
+;
+BDOS$setErrorMode:
+	ld	c,45		;set BDOS error mode
+	jp	bdos
+;
+;##############################################################################
+;BDOS:	flush buffers
+;##############################################################################
+;
+BDOS$flushBuffers:
+	ld	c,030h		;flush buffers
+	ld	e,0FFh		;all active
+	jp	bdos
+;
+;##############################################################################
+;set door open media flags
+;##############################################################################
+;
+setMediaFlags:
+	call	pushall		;push all registers (and popall return address)
+;
+	ld	a,54		;save offset to media flag in SCB
+	ld	(SCBPT$OFFSET),a
+;
+	ld	a,0FFh		;save set operation
+	ld	(SCBPT$SET),a
+;
+	;ld	a,0FFh		;save media flag value (same as set operation)
+	ld	(SCBPT$VALUE),a
+;
+	ld	c,031h		;get/set SCB
+	ld	de,SCBPT
+	jp	bdos
+;
+SCBPT:
+SCBPT$OFFSET:	ds	1	;Offset within SCB
+SCBPT$SET	ds	1	;0FFh=set byte, 0FEh=set word, 000h=get
+SCBPT$VALUE	ds	2	;byte or word value to be set
+;
+;##############################################################################
+;BIOS FUNCTION 31: get disk parameter block
+;##############################################################################
+;
+BDOS$GETDPB:
+	ld	c,31		;get disk parameter block
+	jp	bdos
+;
+;##############################################################################
+;BIOS FUNCTION 9: Select Disk
+;
+;parameters:	C=disk drive (0-15)
+;		E=initial select flag (lsbit = 0)
+;##############################################################################
+;
+BIOS$SELDSK:
+	ld	a,9
+	ld	(BIOSPB),a
+	call	BDOS$directBIOS
+;
+	ld	a,h		;error?
+	or	l
+	ret	nz		;(no)
+;
+	PRINT$	1,"BIOS SELDSK: Invalid drive.",0
+	jp	exit
+;
+;##############################################################################
+;##############################################################################
+BIOS$SELTRK:
+	push	af
+	ld	a,10
+	ld	(BIOSPB),a
+	pop	af
+	jp	BDOS$directBIOS
+;
+;##############################################################################
+;##############################################################################
+BIOS$SELSEC:
+	ld	a,11
+	ld	(BIOSPB),a
+	jp	BDOS$directBIOS
+;
+;##############################################################################
+;##############################################################################
+BIOS$SETDMA:
+	ld	a,12
+	ld	(BIOSPB),a
+	jp	BDOS$directBIOS
+;
+;##############################################################################
+;##############################################################################
+BIOS$READ:
+	ld	a,13
+	ld	(BIOSPB),a
+	call	BDOS$directBIOS
+;
+	or	a		;error?
+	ret	z		;(no)
+;
+	cp	a,1		;non-recoverable error?
+	jr	nz,.l0010	;(no)
+;
+	PRINT$	1,"BIOS READ: Non-recoverable error.",0
+	jr	.l9999
+;
+.l0010:	cp	a,0FFh		;media changed error?
+	jr	nz,.l0020	;(no)
+	PRINT$	1,"BIOS READ: media changed error.",0
+	jr	.l9999
+;
+.l0020:	PRINT$	1,"BIOS READ: Unknown error: ",0
+	call	dec_b		;output acc as decimal
+;
+.l9999	jp	exit		;return to CP/M
+;
+;##############################################################################
+;##############################################################################
+BDOS$directBIOS:
+	ld	(BIOSPB+1),a	;store A register
+	ld	(BIOSPB+2),bc	;store BC registers
+	ld	(BIOSPB+4),de	;store DE registers
+	ld	(BIOSPB+6),hl	;store HL registers
+;
+	ld	c,032h		;bdos - direct BIOS calls
+	ld	de,BIOSPB
+	jp	bdos
+;
+;##############################################################################
+;variable storage
+;##############################################################################
+BIOSPB:	ds	1	;BIOS function number
+	ds	1	;A register
+	ds	2	;BC register
+	ds	2	;DE register
+	ds	2	;HL register
+;
+curdsk:	ds	1	;current drive
+seldsk:	ds	1	;select drive
+track:	ds	2	;track
+sector:	ds	2	;sector
+readflg:ds	1	;read flag
+quiet:	db	1	;quiet flag
+;
+index:	ds	2	;dir index
+count:	ds	2	;dir count
+;
+DPB:	ds	2	;pointer to disk parameter block for selected drive
+offset:	ds	2	;system track offset for selected drive
+spt:	ds	2	;sectors per track
+drm:	ds	2	;dir entries minus one
+psh:	ds	1	;physical shift factor
+secsiz:	ds	2	;physical sector size
+partNum:ds	2	;partition #
+newPart:ds	2	;new partition #
+selPart:ds	2	;select partition #
+;
+;##############################################################################
+;##	CP/M utility code                                             	     ##
+;##############################################################################
+	include	cpmutil.z80
+;##############################################################################
+;##	stack and dir buffer					     	     ##
+;##############################################################################
+;
+	ds	64	;minimum stack area
+	ALIGN$	512	;align to 512 bytes
+stack	equ	$
+;
+DirBuf	equ	$	;dir buffer
+;
+;##############################################################################
+	end

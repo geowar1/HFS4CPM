@@ -1,0 +1,1227 @@
+;   -*- tab-width:     8;-*-
+	title 'CP/M HFS+ mkdir utility'
+;
+;24-Jun-2021	George Warner
+;##############################################################################
+	.z80
+	maclib	MACRO$.LIB
+;##############################################################################
+	aseg
+	org     100h ;base of tpa
+;
+start:  ld      sp,stack	;setup local stack
+;
+	PRINT$	1,"Welcome to mkdir...	by geowar!",0
+;
+	call	setup
+;
+	ld	a,(tail)	;anything in command tail?
+	or	a
+	jr	nz,sk0010	;(yes)
+;
+usage:	PRINT$	1,"usage: mkdir [d:]filename.typ",0
+	jp	exit
+;
+sk0010:	
+if 1
+	ld	a,(seldsk)	;get selected disk
+	add	a,'A'		;add offset to ASCII
+	call	conout
+	ld	a,':'
+	call	conout
+	call	puttab
+;
+	ld	hl,(selPart)	;select drive's partition
+	call	hex_w		;output hex word (in hl) to console
+;
+;	call	pwd		;print working dir (not implemented yet)
+	call	crlf		;output cr/lf to console
+endif
+;
+;does this directory already exist?
+;
+	ld	hl,fcb		;address of file control block
+	ld	a,'.'		;set 1st byte to dir byte
+	ld	(hl),a
+	ex	de,hl		;move fcb to de
+	ld	bc,12		;12 bytes
+	call	findEntry	;find dir entry matching fcb
+	jr	nz,sk0013	;(not found)
+;
+	PRINT$	1,"That dir already exists!",0
+	jp	wboot
+;
+;if this (DOT) dir entry doesn't exist create it
+;
+sk0013:	call	findDOT		;find this (DOT) dir entry
+	jp	z,sk0020	;(found!)
+;
+	PRINT$	1,"This (DOT) dir not found.",0
+;
+	PRINT$	1,"Creating this (DOT) dir",0
+;
+	call	findEmpty	;find empty dir entry
+	jr	z,sk0015	;(found!)
+;
+	PRINT$	1,"Error: no empty dir entry for this (DOT) dir.",0
+	jp	wboot
+;
+sk0015:	ld	de,dot$		;get dot dir entry data
+	ld	bc,12		;set 12 bytes
+	call	setEntry
+;
+	push	hl
+	ld	de,14		;add offset to partition # in dir entry
+	add	hl,de
+;
+	ld	de,(partNum)	;get partition #
+	ld	(hl),e		;store LSByte
+	inc	hl		;bump entry address
+	ld	(hl),d		;store MSByte
+	pop	hl
+if 0
+	ld	bc,32
+	call	dump
+	jp	wboot
+endif
+;
+	call	writeDirSector	;write dir sector to disk
+;
+	PRINT$	1,"Created this (DOT) dir",0
+	jr	sk0030
+;
+sk0020:	PRINT$	1,"Found this (DOT) dir!",0
+;
+if 0
+	ld	bc,32
+	call	dump
+	call	crlf
+endif
+;
+;if parent (DOT-DOT) or root (SLASH) dir entry doesn't exist create root (SLASH) dir entry
+;
+sk0030:	call	findDDOT	;find parent (dot-dot) dir entry
+	jr	z,sk0033	;(found!)
+;
+	PRINT$	1,"Parent (DOT-DOT) dir Not found.",0
+;
+	call	findSlash	;find root (SLASH) dir entry
+	jr	nz,sk0035	;(not found)
+;
+	PRINT$	1,"Root (SLASH) dir found.",0
+	jr	sk0034
+;
+sk0033:	PRINT$	1,"Parent (DOT-DOT) dir found.",0
+sk0034:	jp	sk0040
+;
+sk0035:	PRINT$	1,"Root (SLASH) dir Not found.",0
+sk0036:	PRINT$	1,"Creating root (SLASH) dir",0
+;
+	call	findEmpty	;find empty dir entry
+	jr	z,sk0038	;(found!)
+;
+	PRINT$	1,"Error: no empty dir entry for root (SLASH).",0
+	jp	wboot
+;
+sk0038:	ld	de,slash$	;get slash dir entry data
+	ld	bc,12		;set 12 bytes
+	call	setEntry
+;
+	push	hl
+	ld	de,14		;add offset to partition # in dir entry
+	add	hl,de
+;
+	ld	de,(partNum)	;get partition #
+	ld	(hl),e		;store LSByte
+	inc	hl		;bump entry address
+	ld	(hl),d		;store MSByte
+	pop	hl
+if 0
+	call	crlf
+	ld	bc,32
+	call	dump
+endif
+;
+	call	writeDirSector	;write dir sector to disk
+;
+	PRINT$	1,"Created root (SLASH) dir",0
+;
+;find a new partition
+;
+sk0040:	call	findNewPartition
+;
+;now create new dir entry for this new subdirectory
+;
+	call	findEmpty	;find empty dir entry
+	jr	z,sk0048	;(found!)
+;
+	PRINT$	1,"Error: no empty dir entry for new dir.",0
+	jp	wboot
+;
+sk0048:	PRINT$	1,"Creating new dir entry",0
+;
+	ld	de,fcb
+	ld	bc,12		;set 12 bytes
+	call	setEntry
+;
+	push	hl
+	ld	de,14		;add offset to partition # in dir entry
+	add	hl,de
+;
+	ld	de,(newPart)	;get new partition #
+	ld	(hl),e		;store LSByte
+	inc	hl		;bump entry address
+	ld	(hl),d		;store MSByte
+	pop	hl
+if 0
+	call	crlf
+	ld	bc,32
+	call	dump
+endif
+;
+	call	writeDirSector	;write dir sector to disk
+;
+	PRINT$	1,"Created new dir",0
+;
+done:	PRINT$	1,"DONE!",0
+exit:	jp      reboot
+;
+;##############################################################################
+;find new partition
+;##############################################################################
+;
+findNewPartition:
+	ld      a,(seldsk)      ;get select drive
+;
+fnp010:	call    getDiskInfo	;get disk info for drive (in a)
+	jr      z,fnp020	;(invalid or not HFS+ drive)
+;
+	ld      a,(seldsk)      ;get select disk
+	inc     a		;bump it
+	jr      fnp010		;loop till drive invalid/not HFS+ drive
+;
+fnp020: ld      a,(seldsk)      ;get select disk
+	dec     a		;unbump it
+	call    getDiskInfo	;get disk info for drive (in a)
+	jr      nz,fnp030       ;(valid HFS+ drive)
+;
+	PRINT$  1,"Error: Unable to locate valid partition #",1
+	jp      wboot
+;
+fnp030:	ld      a,(seldsk)      ;get selected disk
+	inc     hl		;bump partition #
+	call    setDrivePartition
+;
+	call    findSLASH	;find root (slash) dir entry
+	jr      z,fnp040	;(found!)
+;
+	call    findDDOT	;find parent (dotdot) dir entry
+	jr      nz,fnp050       ;(not found)
+;
+fnp040: ld      hl,(partNum)    ;get partition #
+	jr      fnp030		;loop till root or parent dir entries not found
+;
+;no root or parent dir entry found
+;
+fnp050: ld      hl,(partNum)    ;get partition #
+	ld	(newPart),hl	;remember it as the new partition #
+;
+	PRINT$	1,"Checking dir entries",0
+	call    checkEntries    ;are all dir entries valid?
+	call    nz,wipeEntries	;(no)go wipe all dir entries
+;
+	call	findLabel	;find label dir entry
+	jp	z,fnp058	;(found!)
+;
+	call    findEmpty       ;find empty dir entry
+	jr      z,fnp055	;(found!)
+;
+	PRINT$  1,"Error: Directory full; can't create label dir entry in new partition.",1
+fnpERR:	call	resetPartition		;restore orginal partition
+	jp      wboot
+;
+fnp055:	PRINT$	1,"Creating label dir entry",0
+;
+fnp058:	ld	de,fcb		;copy new directory name to label dir entry
+	ld	bc,12		;set 12 bytes
+	call    setEntry
+;
+	ld	(hl),020h	;make it a label
+	add	hl,bc		;add offset
+	ld	(hl),031h	;set timestamp bytes
+;
+	ld	de,12		;add offset to address of label create timestamp
+	add	hl,de
+;
+	push	hl		;save it
+;
+	ex	de,hl		;move it to de
+	call	BDOS$GetDateAndTime
+;
+	pop	hl		;restore address of label create timestamp
+	ld	de,4		;add offset to label update timestamp
+	add	hl,de
+;
+	ex	de,hl		;move it to de
+	call	BDOS$GetDateAndTime
+;
+	call	writeDirSector	;write dir sector to disk
+;
+;create this (DOT) dir entry
+;
+	call    findEmpty       ;find empty dir entry
+	jr      z,fnp060	;(found!)
+;
+	PRINT$  1,"Error: Directory full; can't create this (DOT) dir in new partition.",1
+	jp	fnpERR		;go restore partition # and warm boot
+;
+fnp060:	PRINT$	1,"Creating this (DOT) dir",0
+;
+	ld      de,dot$		;make it a this (DOT) dir entry
+	ld	bc,12		;set 12 bytes
+	call    setEntry
+;
+	ld      de,14		;add offset to partition #
+	add     hl,de
+;
+	ld      de,(newPart)	;get new partition #
+	ld      (hl),e		;store lsbyte of partition #
+	inc     hl		;bump pointer
+	ld      (hl),d		;store msbyte of partition #
+;
+	call	writeDirSector	;write dir sector to disk
+;
+;create parent dir entry
+;
+	PRINT$	1,"Creating parent dir entry",0
+;
+	call    findEmpty       ;find empty dir entry
+	jr      z,fnp070	;(found!)
+;
+	PRINT$  1,"Error: Directory full; can't create parent dir entry in new partition.",1
+	jp	fnpERR		;go restore partition # and warm boot
+;
+fnp070:	call    findEmpty       ;find empty dir entry
+	jr      z,fnp075	;(found!)
+;
+	PRINT$  1,"Error: Directory full; can't create parent dir in new partition.",1
+	jp	fnpERR		;go restore partition # and warm boot
+;
+fnp075:	PRINT$	1,"Creating parent dir ",0
+;
+	ld      de,dotdot$      ;make it a parent dir entry
+	ld	bc,12		;set 12 bytes
+	call    setEntry
+;
+	ld      de,14		;add offset to partition #
+	add     hl,de
+;
+	ld      de,(selPart)    ;get select drive's partition #
+	ld      (hl),e		;store lsbyte of partition #
+	inc     hl		;bump pointer
+	ld      (hl),d		;store msbyte of partition #
+;
+;;	call	hex_w		;output hex word (in hl) to console
+;
+	call	writeDirSector	;write dir sector to disk
+;
+;fall-thru	jp	resetPartition
+;
+resetPartition:
+	ld      a,(seldsk)      ;get select drive
+	ld      hl,(selPart)    ;get select partition #
+;
+;fall-thru	jp      setDrivePartition
+;
+;##############################################################################
+;set partition (in hl) for drive (in a)
+;##############################################################################
+;
+setDrivePartition:
+	call	pushpair	;push all register pairs (and poppair return address)
+;
+if 1
+	PRINT$	1,"Switching drive ",0
+;
+	push	af		;save disk
+	add	a,'A'		;convert to ASCII
+	call	putchr
+	pop	af
+;
+	PRINT$	0,": to partition # ",0
+	call	hex_w
+endif
+;
+	push	hl		;save partition #
+;
+	call	getDiskInfo	;get disk info for drive in acc
+	jr	nz,mhd08	;(is HFS+ drive)
+;
+	PRINT$	1,"Not an HFS+ drive.",1
+	jp	wboot
+;
+mhd08:	ld	hl,(DPB)	;get address of DPB
+	ld	de,21		;add offset to partition # address
+	add	hl,de
+;
+	pop	de		;restore partition #
+;
+	ld	(partNum),de	;save new partition #
+;
+	ld	(hl),e		;store partition # after DPB
+	inc	hl
+	ld	(hl),d
+;
+	call	BDOS$FlushBuffers ;flush drive buffers
+	call	setMediaFlags	;set door open flags
+;
+	ld	a,(seldsk)	;get selected disk
+	ld	b,a		;to b
+	ld	hl,1		;initialize drive vector to 1
+mhd010:	add	hl,hl		;shift up drive vector
+	djnz	mhd010		;(loop till --b is zero)
+;
+	ex	de,hl		;move vector to de
+	call	BDOS$ResetDrive	;reset drive
+;
+	ld	a,(seldsk)	;disk to e
+	ld	e,a
+	jp	BDOS$SelectDisk	;select disk
+;
+;##############################################################################
+;check dir entries
+;##############################################################################
+checkEntries:
+	call	pushpair	;push all register pairs (and poppair return address)
+;
+	call	fnd1st		;find first entry
+cE0010:	ld	a,(hl)		;get user #
+;
+	cp	0E5h		;erased?
+	jr	z,cE0070	;(yes)
+;
+	cp	021h		;timestamp?
+	jr	z,cE0070	;(yes)
+;
+	cp	020h		;label?
+	jr	z,cE0020	;(yes)
+;
+	cp	'.'		;dir?
+	jr	z,cE0020	;(yes)
+;
+	cp	32		;valid user #?
+	jr	nc,cE0050	;(no)
+;
+cE0020:	push	hl		;save dir entry pointer
+;
+	ld	b,11		;check 11 bytes
+cE0030:	inc	hl		;bump entry pointer
+	ld	a,(hl)		;get character of filename.typ
+	and	07Fh		;mask msbit
+	ld	c,a		;save it
+;
+	call	toUpper		;convert to upper case
+	cp	c		;still the same?
+	jr	nz,cE0040	;(no)
+;
+	cp	' '		;<space?
+	jr	c,cE0040	;(yes)
+;
+	call	isDelimiter	;is it a delimiter?
+	jr	nz,cE0060	;(no)
+;
+cE0040:	pop	hl		;restore dir entry pointer
+cE0050:	jp	cE0099		;go return bad
+;
+cE0060:	djnz	cE0030		;(loop till --b is zero)
+	pop	hl		;restore dir entry pointer
+cE0070:	jr	cE0090		;go find next
+;
+cE0080:	pop	hl		;restore dir entry pointer
+if 1
+	push	bc
+	push	hl
+	PRINT$	1,"checkEntry[",0
+	ld	hl,(index)
+	call	hex_w
+	PRINT$	0,"]:",1
+	pop	hl
+	ld	bc,32		;dump it
+	call	dump
+	pop	bc
+	endif
+;
+	PRINT$	1,"Valid? ",0
+	call	getchr		;get character from console
+	call	toupper		;convert to uppercase
+	cp	'Y'		;Yes?
+	ret	nz		;(no)
+;
+cE0090:	call	fndnxt		;find next entry
+	jp	nz,cE0010	;(not end-of-dir)
+;
+	xor	a		;return zero flag (all entries good!)
+	ret
+;
+cE0099:	xor	a		;return nz flag (bad dir)
+	dec	a
+	ret
+;
+;##############################################################################
+;is this character (in a) a delimiter?
+;##############################################################################
+;
+isDelimiter:
+	call	pushpair	;push all register pairs (and poppair return address)
+	ld	c,a		;copy character to c
+	ld	hl,delimiters$	;get delimiter string
+iD0010:	ld	a,(hl)		;get delimiter from delimiter string
+	inc	hl		;bump delimiter string pointer
+;
+	or	a		;zero [end-of-string]?
+	jr	z,iD0090	;(yes)
+;
+	sub	c		;same?
+	ret	z		;(yes)
+;
+iD0090:	xor	a		;return not-zero
+	dec	a
+	ret
+;
+delimiters$:
+	db	cr,lf,tab,' .,:;[]=<>|',0
+;
+;##############################################################################
+;wipe all dir entries
+;##############################################################################
+wipeEntries:
+	call	pushpair	;push all register pairs (and poppair return address)
+;
+	PRINT$	1,"Wiping all dir entires.",0
+;
+	call	fnd1st		;find first entry
+wE0010:	ld	c,'!'		;assume timestamp user #
+;
+	ld	a,(index)	;get dir entry index
+	and	003h		;timestamp?
+	cp	003h
+	jr	z,wE0020	;(yes)
+;
+	ld	c,0E5h		;empty record user #
+;
+wE0020:	ld	(hl),c		;store user #
+	inc	hl		;bump dir entry pointer
+;
+	xor	a		;zero rest of dir entry
+	ld	b,31		;31 bytes
+wE0030:	ld	(hl),a
+	inc	hl		;bump pointer
+	djnz	wE0030
+;
+	call	writeDirSector	;write dir sector to disk
+;
+	call	fndnxt		;find next entry
+	jr	nz,wE0010	;(not end-of-dir)
+;
+	xor	a		;return zero flag (all entries good!)
+	ret
+;
+timestamp$:
+	defb	'!'		;timestamp
+	rept	31
+	defb	000h
+	endm
+;
+;##############################################################################
+;set dir entry at hl with data at de for bc bytes
+;##############################################################################
+;
+setEntry:
+	call	pushpair	;push all register pairs (and poppair return address)
+;
+if 0
+	PRINT$	1,"setEntry: ",0
+	ex	de,hl
+	call	dump
+	ex	de,hl
+endif
+;
+	ld	(hl),0		;zero entry
+	ld	d,h
+	ld	e,l
+	inc	de
+	ld	bc,31
+	ldir			;copy bc-- bytes from hl++ to de++
+;
+	ld	hl,2		;compute address of bc on stack
+	add	hl,sp
+;
+	ld	c,(hl)		;get bc off stack
+	inc	hl
+	ld	b,(hl)
+	inc	hl
+;
+	ld	e,(hl)		;get de off stack
+	inc	hl
+	ld	d,(hl)
+	inc	hl
+;
+	ld	a,(hl)		;get hl off stack
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+;
+	push	hl
+	ex	de,hl		;swap data and entry address
+	ldir			;copy bc-- bytes from hl++ to de++
+	pop	hl
+;
+if 0
+	ld	bc,32
+	call	dump
+	call	crlf
+endif
+;
+	ret
+;
+;##############################################################################
+;find this (DOT) dir entry
+;##############################################################################
+findDOT:
+	ld	de,dot$	;address of dot string
+	ld	bc,12		;12 bytes
+	jp	findEntry	;go find it
+;
+dot$:	db	'..          '	;dot dir string
+;##############################################################################
+;find parent (DOT-DOT) dir entry
+;##############################################################################
+findDDOT:
+	ld	de,dotdot$	;address of dotdot string
+	ld	bc,12		;12 bytes
+	jp	findEntry	;go find it
+;
+dotdot$:db	'...         '	;dotdot dir string
+;##############################################################################
+;find root (SLASH) dir entry
+;##############################################################################
+findSlash:
+	ld	de,slash$	;address of slash dir string
+	ld	bc,12		;12 bytes
+	jp	findEntry	;go find it
+;
+slash$:	db	'./          '	;slash dir string
+;##############################################################################
+;find label dir entry
+;##############################################################################
+findLabel:
+	ld	de,label$	;address of label string
+	ld	bc,1		;one byte
+	jr	findEntry	;go find it
+;
+;label dir string
+label$:	defb	020h
+;##############################################################################
+;find empty dir entry
+;##############################################################################
+findEmpty:
+	ld	de,empty$	;address of empty string
+	ld	bc,1		;one byte
+	jr	findEntry	;go find it
+;
+;empty dir string
+empty$:	defb	0E5h
+;##############################################################################
+;find dir entry
+;bc=length, de=entry to find
+;##############################################################################
+findEntry:
+	call	fnd1st		;find first entry
+fE0010:
+if 0
+	push	bc
+	push	hl
+	PRINT$	1,"findEntry[",0
+	ld	hl,(index)
+	call	hex_w
+	PRINT$	0,"]:",0
+	pop	hl
+	ld	bc,32		;dump it
+	call	dump
+	pop	bc
+	endif
+;
+	call	memcmp		;compare (hl++) to (de++) for (bc--) bytes
+	ret	z		;(equal!)
+;
+	call	fndnxt		;find next entry
+	jr	nz,fE0010	;(not end-of-dir)
+;
+	xor	a		;return -1 [entry not found]
+	dec	a
+	ret
+;
+;##############################################################################
+;do initial setup
+;##############################################################################
+;
+setup:	ld	e,0FFh		;set error mode to return error mode
+	call	BDOS$SetErrorMode
+;
+	call	BDOS$GetCurrentDisk
+	ld	(curdsk),a	;store it
+;
+if 0
+	PRINT$	1,"FCB: ",0
+	ld	hl,fcb		;dump fcb
+	call	dump_fcb
+	ld	bc,32
+	call	dump
+	endif
+;
+	ld	a,(fcb)		;get drive byte
+	or	a		;default drive?
+	jr	nz,notzero	;(no)
+;
+	ld	a,(curdsk)	;get current drive
+	inc	a
+;
+notzero:ld	(fcb),a		;make it implicit
+	dec	a		;drive A?
+	jp	nz,dskok	;(no)
+;
+dskerr:	PRINT$	1,"CP/M HFS not supported on boot/system drive A.",0
+	jp	exit
+;
+dskok:	call	getDiskInfo	;get disk info (duh!)
+	ld	(selPart),hl	;save the select partition #
+	ret	nz		;(good)
+;
+	PRINT$	1,"Not HFS+ drive.",0
+	jp	reboot
+;
+;##############################################################################
+;get disk (in a) info; return partition # in hl (-1 & zero flag if invalid)
+;##############################################################################
+getDiskInfo:
+	call	selectDisk	;select drive (in a)
+	jp	nz,gdi020	;(invalid)
+;
+	call	BDOS$GetDPB	;get DPB
+	ld	(DPB),hl	;store it
+;
+	push	hl		;copy to IX
+	pop	ix
+;
+	ld	l,(ix+0)	;get SPT
+	ld	h,(ix+1)
+	ld	(spt),hl	;store it
+;
+	ld	l,(ix+7)	;get DRM
+	ld	h,(ix+8)
+	ld	(drm),hl	;store it
+;
+	inc	hl		;bump to count
+	ld	(count),hl	;store it
+;
+	ld	l,(ix+13)	;get offset
+	ld	h,(ix+14)
+	ld	(offset),hl	;store it
+;
+	ld	a,(ix+15)	;get PSH
+	ld	(psh),a		;store it
+;
+	ld	b,a		;compute sector size
+	inc	b		;do one extra (so we don't have to test for zero)
+	ld	hl,64		;start with half sector (because of extra)
+gdi010:	add	hl,hl		;double sector size
+	djnz	gdi010		;(loop until --b is zero)
+;
+	ld	(secsiz),hl	;store it
+;
+	push	ix		;DPB to hl
+	pop	hl
+;
+	ld	de,17		;add offset to HFS+ signature
+	add	hl,de
+;
+	ld	de,hfs$		;address of HFS+ string
+	ld	bc,4		;four bytes
+	call	memcmp		;compare (hl++) to (de++) for (bc--) bytes
+	jr	nz,gdi020	;(not HFS+ partition)
+;
+	add	hl,bc		;add offset to partition #
+	ldhlhl			;ldw hl,(hl)
+	jr	gdi030
+;
+gdi020:
+if 0
+	ld	bc,4
+	call	z,dump
+endif
+	ld	hl,-1
+;
+gdi030:	ld	(partNum),hl	;store it
+	ld	de,-1
+	cphlde			;cpw hl,de
+	ret
+;
+hfs$:
+	db	'hfs+'	;HFS partition signature
+;
+;##############################################################################
+;find first dir entry
+;##############################################################################
+;
+fnd1st:	or	a		;clear carry
+	sbc	hl,hl		;zero hl
+	dec	hl		;bump hl to -1
+	ld	(sector),hl	;set sector to -1 (to force 1st read)
+	ld	(index),hl	;start index at -1
+;
+;##############################################################################
+;find next dir entry
+;##############################################################################
+;
+fndnxt:	call	pushpair	;push all register pairs (and poppair return address)
+;
+	ld	hl,(index)	;bump index
+	inc	hl
+	ld	(index),hl
+;
+if 0
+	PRINT$	1,"index: ",0
+	call	dec_w
+	PRINT$	0," (",0
+	call	hex_w
+endif
+;
+	ex	de,hl		;move to de
+;
+	ld	hl,(count)	;are we done?
+if 0
+	PRINT$	0,"), count: ",0
+	call	dec_w
+	PRINT$	0," (",0
+	call	hex_w
+	PRINT$	0,")",0
+endif
+	or	a		;clear carry
+	sbc	hl,de
+	ret	z		;(yes)
+;
+	ld	hl,2		;dir entries per (128 byte) sector (half for extra shift)
+	ld	a,(psh)		;get physical shift factor
+	inc	a		;do extra shift (so we don't have to test for zero)
+	ld	b,a
+fnd005:	add	hl,hl
+	djnz	fnd005		;(loop until --b is zero)
+;
+if 0
+	PRINT$ 0,", div by: ",0
+	call	dec_w
+endif
+	ex	de,hl		;move to de
+;
+	ld	bc,(index)
+	call	Div16		;bc=bc/de, hl=bc%de
+	push	hl		;store remainder
+if 0
+	PRINT$ 0,", mod;",0
+	call	hex_w
+	call	crlf
+endif
+;
+	ld	de,(spt)	;divide by sectors per track
+	call	Div16		;bc=bc/de, hl=bc%de
+	ld	de,(sector)	;get last sector
+	ld	(sector),hl	;store new sector
+	sbc	hl,de		;same?
+	jr	z,$+3		;(yes)
+	dec	a
+	ld	(readflg),a	;store read flag
+;
+	ld	hl,(offset)	;add offset to track
+	add	hl,bc
+	ld	(track),hl	;store track
+;
+	pop	de		;restore remainder
+	ld	bc,32		;32 bytes per dir entry
+	call	Mul16		;dehl = bc * de
+	ld	de,DirBuf	;add dir buffer
+	add	hl,de		;[hl now had the dir entry address]
+;
+	ld	a,(readflg)	;need to do read?
+	or	a
+	jp	z,skipread	;(no)
+;
+	push	hl		;store dir entry address
+;
+	call	readDirSector
+;
+if	0
+	PRINT$	1,"Disk: ",0
+	ld	a,(seldsk)
+	call	dec_b
+;
+	PRINT$	0,", Track: ",0
+	ld	hl,(track)
+	call	dec_w
+	PRINT$	0," (0x",0
+	call	hex_w
+;
+	PRINT$	0,"), sector: ",0
+	ld	hl,(sector)
+	call	dec_w
+	PRINT$	0," (0x",0
+	call	hex_w
+	PRINT$	0,")",0
+;
+  if 0
+	call	crlf
+	ld	hl,DirBuf	;in this sector
+	ld	bc,(secsiz)
+	call	dump
+	call	crlf
+  endif
+endif
+;
+	pop	hl		;restore dir entry address
+;
+skipread:
+	ex	de,hl		;save dir entry address in de
+	ld	hl,6
+	add	hl,sp
+	ld	(hl),e		;ldw (hl),de
+	inc	hl
+	ld	(hl),d
+;
+	xor	a		;return not zero (not done)
+	dec	a
+	ret
+;
+;##############################################################################
+;select disk
+;##############################################################################
+selectDisk:
+	ld	(seldsk),a	;store select disk
+;
+	ld	c,14		;select disk
+	ld	e,a
+	call	bdos
+	or	a		;success?
+	ret	z		;(yes)
+;
+	ld	a,(quiet)	;quiet?
+	or	a
+	ret	nz		;(yes)
+;
+	ld	a,h		;get error code
+	cp	1		;disk I/O error?
+	jr	nz,ds_10	;(no)
+;
+	PRINT$	1,'Select Disk: Disk I/O error',0
+	jr	selerr9
+;
+ds_10:	cp	4		;invalid drive?
+	jr	nz,ds_20	;(no)
+;
+	PRINT$	1,'Select Disk: Invalid drive',0
+	jr	selerr9
+;
+ds_20:	PRINT$	1,'Select Disk: Unknown error;',0
+	call	dec_b		;output acc as decimal
+;
+selerr9:jp	exit
+;
+;##############################################################################
+;read dir sector
+;##############################################################################
+readDirSector:
+	call	selectDir	;select dir (disk, track, sector & DMA)
+	jp	BIOS$READ	;read sector
+;
+;##############################################################################
+;write dir sector
+;##############################################################################
+writeDirSector:
+	call	selectDir	;select dir (disk, track, sector & DMA)
+	jp	BIOS$WRITE	;write sector
+;
+;##############################################################################
+;select dir (disk, track, sector & DMA)
+;##############################################################################
+selectDir:
+	ld	a,(seldsk)	;select disk
+	ld	c,a
+	call	BIOS$SELDSK
+;
+	ld	bc,(track)	;select track
+	call	BIOS$SELTRK
+;
+	ld	bc,(sector)	;select sector
+	call	BIOS$SELSEC
+;
+	ld	bc,DirBuf	;set DMA address
+	jp	BIOS$SETDMA
+;
+;##############################################################################
+;BIOS FUNCTION 14: Select Disk
+;parameters: disk in e
+;returns: error flag in a, physical error in h
+;##############################################################################
+;
+BDOS$SelectDisk:
+	ld	c,14		;select disk
+	jp	bdos
+;
+;##############################################################################
+;BIOS FUNCTION 25: Get Current Disk
+;returns: current disk in a
+;##############################################################################
+;
+BDOS$GetCurrentDisk:
+	ld	c,25		;get current disk
+	jp	bdos
+;
+;##############################################################################
+;BIOS FUNCTION 31: get disk parameter block
+;returns: DPB in hl
+;##############################################################################
+;
+BDOS$GetDPB:
+	ld	c,31		;get disk parameter block
+	jp	bdos
+;
+;##############################################################################
+;BIOS FUNCTION 37: Reset Drive
+;parameters: drive vector in de
+;##############################################################################
+;
+BDOS$ResetDrive:
+	ld	c,37		;reset drive
+	jp	bdos
+;
+;##############################################################################
+;BDOS FUNCTION 45: Set Error Mode
+;parameters:	e=error mode (FF=return, FE=return & display else default)
+;##############################################################################
+;
+BDOS$SetErrorMode:
+	ld	c,45		;set BDOS error mode
+	jp	bdos
+;
+;##############################################################################
+;BDOS FUNCTION 48: Flush buffers
+;##############################################################################
+;
+BDOS$FlushBuffers:
+	ld	c,030h		;flush buffers
+	ld	e,0FFh		;all active
+	jp	bdos
+;
+;##############################################################################
+;set door open media flags
+;##############################################################################
+;
+setMediaFlags:
+	call	pushall		;push all registers (and popall return address)
+;
+	ld	a,54		;save offset to media flag in SCB
+	ld	(SCBPT$OFFSET),a
+;
+	ld	a,0FFh		;save set operation
+	ld	(SCBPT$SET),a
+;
+	;ld	a,0FFh		;save media flag value (same as set operation)
+	ld	(SCBPT$VALUE),a
+	ld	de,SCBPT
+;
+;##############################################################################
+;BDOS FUNCTION 49:Get/Set SCB
+;parameters: address of SCB parameter table in de
+;##############################################################################
+BDOS$GetSetSCB:
+	ld	c,031h		;get/set SCB
+	jp	bdos
+;
+SCBPT:
+SCBPT$OFFSET:	ds	1	;Offset within SCB
+SCBPT$SET	ds	1	;0FFh=set byte, 0FEh=set word, 000h=get
+SCBPT$VALUE	ds	2	;byte or word value to be set
+;
+;##############################################################################
+;BDOS FUNCTION 50:Direct BIOS calls
+;##############################################################################
+BDOS$directBIOS:
+	ld	(BIOSPB+1),a	;store A register
+	ld	(BIOSPB+2),bc	;store BC registers
+	ld	(BIOSPB+4),de	;store DE registers
+	ld	(BIOSPB+6),hl	;store HL registers
+;
+	ld	c,032h		;bdos - direct BIOS calls
+	ld	de,BIOSPB
+	jp	bdos
+;
+BIOSPB:	ds	1	;BIOS function number
+	ds	1	;A register
+	ds	2	;BC register
+	ds	2	;DE register
+	ds	2	;HL register
+;
+;##############################################################################
+;BIOS FUNCTION 105: get Date And Time
+;parameters: DAT address in de
+;##############################################################################
+;
+BDOS$GetDateAndTime:
+	ld	c,105		;get date and time
+	jp	bdos
+;
+;##############################################################################
+;BIOS FUNCTION 9: Select Disk
+;
+;parameters:	C=disk drive (0-15)
+;		E=initial select flag (lsbit = 0)
+;##############################################################################
+;
+BIOS$SELDSK:
+	ld	a,9
+	ld	(BIOSPB),a
+	call	BDOS$directBIOS	
+;
+	ld	a,h		;error?
+	or	l
+	ret	nz		;(no)
+;
+	PRINT$	1,"BIOS SELDSK: Invalid drive.",0
+	jp	exit
+;
+;##############################################################################
+;BIOS FUNCTION 10: Select Track
+;parameters: track number in bc
+;##############################################################################
+BIOS$SELTRK:
+	push	af
+	ld	a,10
+	ld	(BIOSPB),a
+	pop	af
+	jp	BDOS$directBIOS	
+;
+;##############################################################################
+;BIOS FUNCTION 11: Select sector
+;parameters: sector number in bc
+;##############################################################################
+BIOS$SELSEC:
+	ld	a,11
+	ld	(BIOSPB),a
+	jp	BDOS$directBIOS	
+;
+;##############################################################################
+;BIOS FUNCTION 12: Set DMA
+;parameters: DMA in bc
+;##############################################################################
+BIOS$SETDMA:
+	ld	a,12
+	ld	(BIOSPB),a
+	jp	BDOS$directBIOS	
+;
+;##############################################################################
+;BIOS FUNCTION 13: Read
+;parameters: none
+;returns: error in a
+;##############################################################################
+BIOS$READ:
+	ld	a,13
+	ld	(BIOSPB),a
+	call	BDOS$directBIOS	
+;
+	or	a		;error?
+	ret	z		;(no)
+;
+	cp	a,1		;non-recoverable error?
+	jr	nz,.l0010	;(no)
+;
+	PRINT$	1,"BIOS READ: Non-recoverable error.",0
+	jr	.l9999
+;
+.l0010:	cp	a,0FFh		;media changed error?
+	jr	nz,.l0020	;(no)
+	PRINT$	1,"BIOS READ: media changed error.",0
+	jr	.l9999
+;
+.l0020:	PRINT$	1,"BIOS READ: Unknown error: ",0
+	call	dec_b		;output acc as decimal
+;
+.l9999	jp	exit		;return to CP/M
+;
+;##############################################################################
+;BIOS FUNCTION 14: Write
+;parameters: none
+;returns: error in a
+;##############################################################################
+BIOS$WRITE:
+	push	af
+	ld	a,14
+	ld	(BIOSPB),a
+	pop	af
+	ld	c,1		;non-deferred write
+	jp	BDOS$directBIOS
+;
+;##############################################################################
+;local variable storage
+;##############################################################################
+;
+curdsk:	ds	1	;current drive
+seldsk:	ds	1	;select drive
+track:	ds	2	;track
+sector:	ds	2	;sector
+readflg:ds	1	;read flag
+quiet:	db	1	;quiet flag
+;
+index:	ds	2	;dir index
+count:	ds	2	;dir count
+;
+DPB:	ds	2	;pointer to disk parameter block for selected drive
+offset:	ds	2	;system track offset for selected drive
+spt:	ds	2	;sectors per track
+drm:	ds	2	;dir entries minus one
+psh:	ds	1	;physical shift factor
+secsiz:	ds	2	;physical sector size
+partNum:ds	2	;partition #
+newPart:ds	2	;new partition #
+selPart:ds	2	;select partition #
+;
+;##############################################################################
+;##	CP/M utility code
+;##############################################################################
+	include	cpmutil.z80
+;##############################################################################
+;##	stack and dir buffer
+;##############################################################################
+;
+	ds	64	;minimum stack area
+	ALIGN$	512	;align to 512 bytes
+stack	equ	$
+;
+DirBuf	equ	$	;dir buffer
+;
+;##############################################################################
+	end
+
+this is the end!
+
+return:	ld	de,(retCode)
+retDE:	ld	c,108		;BDOS function 108:Get/Set program return code
+	call	bdos
+	jp      reboot
+;
+setBad:	ld	hl,0FF00h	;set return code to 0xFF00 (bad)
+	ld	(retCode),hl
+	ret
+;
+retBad:	ld	de,0FF00h	;return code = 0xFF00 (bad)
+	jr	retDE
+;
+retCode:ds	2		;the program return code
+
