@@ -187,3 +187,8 @@ I also haven't added any code to allow you to mkdir or cd more than one (sub)dir
 
 So you can't mkdir or cd to "/my/big/long/path/".
 
+TODO: I haven't written a "rmdir" to remove (sub)directories.
+
+To delete a sub-directory entry just change it's user # to 0xE5.
+
+To free a partition you'll have to write invalid user #'s (I use 0xFF) into the first directory entry for that partition.
