@@ -94,15 +94,14 @@ Anyway, that’s what I’ve got working so far and I’m mostly happy with it.
 
 Questions & feedback welcome.
 
-## How to play with it
+## How to play with HFS4CPM
 
 First you have to modify your BIOS to support HFS4CPM. After each DPB for drives that you want to support partitions add a four byte signature 'hfs+'.
 
 Like this:
 
 ```
-DPB0:
-	DPB	hstsiz,spt,numtrks,blksiz,drm,1,8000H
+DPB0:	DPB	hstsiz,spt,numtrks,blksiz,drm,1,8000H
 	db	'hfs+'  	; Partition signature
 	dw	0			; Partition #
 ```
@@ -113,9 +112,8 @@ Now modify the disk, track, sector to CF/IDE LBA code to support the partition #
 ```
 ;
 ;  Convert CP/M Track and Sector requests to LBA and write to drive registers
-wrlba:	;;CALL	DUMPINFO
 ;
-	XRA	A			;CLEAR ERROR FLAG
+wrlba:	XRA	A			;CLEAR ERROR FLAG
 	STA	ERFLG
 ;
 ;GET THE RELATIVE DRIVE #
@@ -170,3 +168,15 @@ lbatrk: DAD	H			;shift HL left one bit
 	MVI	E,REGseccnt
 	JP	IDEwr8D
 ```
+
+Ok, at this point everything should "just work" (™).
+
+maphd will let you change what partition is assigned to a logical drive.
+mkdir will create a new subdirectory.
+pwd will print out the working directory for a logical drive.
+ddir will output a list of directories for the working directory for a logical drive.
+cd will change the working directory for a logical drive.
+note: since CP/M won't parse '.' or '..' (because '.' is a filename/type delimiter) you'll have to use "cd --" to go up one directory.
+I also haven't added any code to allow you to mkdir or cd more than one (sub)directory at a time.
+So you can't mkdir or cd to "/my/big/long/path/".
+
