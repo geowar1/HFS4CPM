@@ -93,3 +93,80 @@ In order to be able to ‘cd ..” our mkdir app will 1) find an unused partitio
 Anyway, that’s what I’ve got working so far and I’m mostly happy with it.
 
 Questions & feedback welcome.
+
+## How to play with it
+
+First you have to modify your BIOS to support HFS4CPM. After each DPB for drives that you want to support partitions add a four byte signature 'hfs+'.
+
+Like this:
+
+```
+DPB0:
+	DPB	hstsiz,spt,numtrks,blksiz,drm,1,8000H
+	db	'hfs+'  	; Partition signature
+	dw	0			; Partition #
+```
+Set the partitions # sequentially (a:0, b:1, c:2, etc.)
+
+Now modify the disk, track, sector to CF/IDE LBA code to support the partition # from the DPB.
+
+```
+;
+;  Convert CP/M Track and Sector requests to LBA and write to drive registers
+wrlba:	;;CALL	DUMPINFO
+;
+	XRA	A			;CLEAR ERROR FLAG
+	STA	ERFLG
+;
+;GET THE RELATIVE DRIVE #
+;
+	LXI	H,12			;add offset to address of DPB
+	DAD	D			;to address of XDPH
+;
+	MOV	E,M			;get LSByte of DPB
+	INX	H			;bump pointer
+	MOV	D,M			;get MSByte of DPB
+;
+	LXI	H,17+4			;add offset to address of partition #
+	DAD	D
+;
+	MOV	E,M			;get LSByte of partition #
+	INX	H			;bump pointer
+	MOV	A,M			;get MSByte of partition #
+;
+;Now we want to build our LBA as PPPPPPPP PPTTTTTT TTSSSSSS in DHL
+;First we load the track (0-255) and partition # (0-1023) into AHL
+;and then multiply it by 64 (six shifts left) and put the high byte into D
+;and then OR the sector # (0-63) into the LSByte
+;
+	LHLD	@TRK			;get CPM requested Track (0-255)
+	MOV	H,E			;get LSByte of partition #
+;
+	MVI	B,06H			;shift AHL 6 places to left (*64)
+lbatrk: DAD	H			;shift HL left one bit
+	RAL				;rotate overflow into Acc
+	DJNZ	lbatrk			;loop around 6 times i.e x 64
+;
+	MOV	D,A			;get MSByte of LBA
+;
+	LDA	@SECT			;Get CPM requested sector
+	ORA	L			;Add value in L to sector info in A
+	MOV	L,A			;copy LSByte of LBA to L
+;
+;DHL should now contain correct LBA value
+;
+	MVI	E,REGcylinderMSB
+	CALL	IDEwr8D			;Send info to drive
+
+	MOV	D,H			;load lba high byte to D from H
+	MVI	E,REGcylinderLSB
+	CALL	IDEwr8D			;Send info to drive
+
+	MOV	D,L			;load lba low byte to D from L
+	MVI	E,REGsector
+	CALL	IDEwr8D			;Send info to drive
+
+	MVI	D,1			;For now, one sector at a time
+	MVI	E,REGseccnt
+	JP	IDEwr8D
+```
