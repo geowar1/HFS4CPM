@@ -11,10 +11,10 @@ On the Z280 board the BIOS mapped the partitions by adding a 64 track offset to 
 
 So my next step was to put a table of partition #’s somewhere in the BIOS so the READ/WRITE routines could just add the partition bits to the LBA. That worked better… to the limit of the (IIRC 27-bit) LBA. Something like this:
 
-pppppppppppppttttttssssssss < 27-bit LBA
-|||||||||||||||||||++++++++—< 256 sectors (per track)
-|||||||||||||++++++————-----< 64 tracks (per drive)
-+++++++++++++———————--------< 8,192 partitions (per CF/IDE)
+> pppppppppppppttttttssssssss < 27-bit LBA
+> |||||||||||||||||||++++++++—< 256 sectors (per track)
+> |||||||||||||++++++————-----< 64 tracks (per drive)
+> +++++++++++++———————--------< 8,192 partitions (per CF/IDE)
 
 That worked better (up to 64 GBytes!) but… how can my mapping app find this table in the BIOS? 1) I could put at a fixed offset (Maybe just after the BIOS jump table?). This allowed me to change the drive mapping just by slamming new values into this table. So I wrote a small app to do just that. It would flush the logical drive, remap it and then remount it. So far so good. Pros: it was KISS; cons: it was too KISS. Since it depended on being at a specific BIOS offset after the defined jump table it wouldn't work on systems that had extra (non-standard) jump tables. entries. (and I didn't want to have to tweak a unique mapping app for each non-standard BIOS.
 
@@ -36,10 +36,10 @@ The first one I wrote just parses the command line looking for logical drive & p
 
 If it doesn’t find any it just dumps the partition #’s for all mounted logical drives that support them:
 
-A> maphd
-a:0 b:1 c:2 d:3
-a> maphd b:4
-a:0 b:4 c:2 d:3
+> A> maphd
+> a:0 b:1 c:2 d:3
+> a> maphd b:4
+> a:0 b:4 c:2 d:3
 
 Note: I specifically disabled the ability to change the partition for drive A: (the boot drive/partition) and I disallowed mapping the same partition to multiple logical drives.
 
@@ -53,25 +53,26 @@ So… now where do I store the directory information? How about in the directory
 
 Ok, so now how to use it? Any sub-directory needed to know it’s parent directory (for pwd and “cd ..” to work) and then my cd app needed to know the partition # for a specified sub-directory.
 
-CP/M directory entry:
-offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
-00:    2E 47 41 4D 45 53 00 00 00 00 00 00 00 00 00 00 ‘.GAMES••••••••••’
-10:    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ‘••••••••••••••••'
+> CP/M directory entry:
+> offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+> 00:    2E 47 41 4D 45 53 00 00 00 00 00 00 00 00 00 00 ‘.GAMES••••••••••’
+> 10:    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ‘••••••••••••••••'
 
 Ok, now where to put the partition #? Because of how the CP/M parser works (and I didn’t want to write my own) the file name & extensions takes up a maximum of 11 bytes:
 
-CP/M directory entry:
-offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
-00:    2E 47 45 4F 58 41 52 44 41 54 00 00 00 00 00 00 ‘.GEOWAR11DAT••••’
-10:    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ‘••••••••••••••••
+> CP/M directory entry:
+> offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+> 00:    2E 47 45 4F 58 41 52 44 41 54 00 00 00 00 00 00 ‘.GEOWAR11DAT••••’
+> 10:    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ‘••••••••••••••••
+
 (note: because of how the CP/M parser works I choose to use the 8.3 file name/type format for directory names.)
 
 I could put the 16-bit partition # pretty much anywhere else… but arbitrarily choose the two bytes at offset 14-15… just in case some directory scanning program I’m not aware of looked at the 16-31 byte offsets.
 
 So now my GAMES CP/M directory entry looks like this:
-offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
-00:    2E 47 41 4D 45 53 00 00 00 00 00 00 00 00 05 00 ‘.GAMES••••••••••’
-10:    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ‘••••••••••••••••'
+> offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
+> 00:    2E 47 41 4D 45 53 00 00 00 00 00 00 00 00 05 00 ‘.GAMES••••••••••’
+> 10:    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ‘••••••••••••••••'
 
 Note: the LSByte of the partition (at offset 0x0E) is now 5. And our ‘cd games’ command (/app) will change the mapping for this drive to partition #5.
 
